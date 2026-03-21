@@ -1,7 +1,7 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" /> 
+    <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     
@@ -38,21 +38,17 @@
     <!-- Google Fonts - Optimized with display swap and preconnect -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <!-- Primary font: Inter for body text -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-    <!-- Secondary font: Playfair Display for headings/accents -->
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-    <!-- Optional: Merriweather for blog content -->
     <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700;900&display=swap" rel="stylesheet">
     
     <!-- Canonical URL -->
     <link rel="canonical" href="https://natureyogameditation.com/">
     
-    <!-- Favicon -->
+    <!-- Favicon - Add actual favicon files to public folder -->
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
-    
     <link rel="mask-icon" href="/safari-pinned-tab.svg" color="#4CAF50">
     <meta name="msapplication-TileColor" content="#4CAF50">
     <meta name="theme-color" content="#4CAF50">
@@ -63,7 +59,6 @@
     <meta name="format-detection" content="telephone=no">
     <meta name="rating" content="General">
     <meta name="copyright" content="Nature Yoga & Meditation">
-    <meta name="target" content="all">
     
     <!-- Structured Data / JSON-LD for Rich Results -->
     <script type="application/ld+json">
@@ -90,33 +85,7 @@
       ],
       "openingHours": "Mo-Fr 09:00-17:00",
       "paymentAccepted": "Cash, Credit Card, PayPal, Razorpay",
-      "currenciesAccepted": "USD, INR, EUR",
-      "hasOfferCatalog": {
-        "@type": "OfferCatalog",
-        "name": "Yoga & Meditation Products",
-        "itemListElement": [
-          {
-            "@type": "Product",
-            "name": "Eco-Friendly Yoga Mat",
-            "description": "Natural rubber yoga mat with alignment markings",
-            "offers": {
-              "@type": "Offer",
-              "price": "49.99",
-              "priceCurrency": "USD"
-            }
-          },
-          {
-            "@type": "Product",
-            "name": "Meditation Cushion Set",
-            "description": "Handcrafted buckwheat hull zafu and zabuton set",
-            "offers": {
-              "@type": "Offer",
-              "price": "79.99",
-              "priceCurrency": "USD"
-            }
-          }
-        ]
-      }
+      "currenciesAccepted": "USD, INR, EUR"
     }
     </script>
     
@@ -133,18 +102,8 @@
       },{
         "@type": "ListItem",
         "position": 2,
-        "name": "Yoga Mats",
-        "item": "https://natureyogameditation.com/yoga-mats"
-      },{
-        "@type": "ListItem",
-        "position": 3,
-        "name": "Meditation",
-        "item": "https://natureyogameditation.com/meditation"
-      },{
-        "@type": "ListItem",
-        "position": 4,
-        "name": "Props",
-        "item": "https://natureyogameditation.com/yoga-props"
+        "name": "Products",
+        "item": "https://natureyogameditation.com/products"
       }]
     }
     </script>
@@ -194,71 +153,13 @@
     }
     </script>
     
-    <!-- Shipping Settings Structured Data -->
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "OfferShippingDetails",
-      "shippingRate": {
-        "@type": "MonetaryAmount",
-        "value": "0",
-        "currency": "USD"
-      },
-      "shippingDestination": {
-        "@type": "DefinedRegion",
-        "addressCountry": "US"
-      },
-      "deliveryTime": {
-        "@type": "ShippingDeliveryTime",
-        "handlingTime": {
-          "@type": "QuantitativeValue",
-          "minValue": 1,
-          "maxValue": 2,
-          "unitCode": "DAY"
-        },
-        "transitTime": {
-          "@type": "QuantitativeValue",
-          "minValue": 3,
-          "maxValue": 7,
-          "unitCode": "DAY"
-        }
-      }
-    }
-    </script>
-    
     <!-- Preconnect for external services -->
     <link rel="preconnect" href="https://checkout.razorpay.com">
-    
-    <!-- Preload critical assets -->
-    <link rel="preload" href="/hero-image.webp" as="image" type="image/webp">
-    <link rel="preload" href="/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin>
     
     <!-- DNS Prefetch for external domains -->
     <link rel="dns-prefetch" href="https://fonts.googleapis.com">
     <link rel="dns-prefetch" href="https://fonts.gstatic.com">
     <link rel="dns-prefetch" href="https://checkout.razorpay.com">
-    
-    <!-- Robots Meta Tag for specific pages (can be overridden) -->
-    <meta name="robots" content="max-snippet:-1, max-image-preview:large, max-video-preview:-1">
-    
-    <!-- Verification for Search Consoles -->
-    <meta name="google-site-verification" content="your-google-verification-code">
-    <meta name="msvalidate.01" content="your-bing-verification-code">
-    <meta name="yandex-verification" content="your-yandex-verification-code">
-    
-    <!-- Pinterest Verification -->
-    <meta name="p:domain_verify" content="your-pinterest-verification-code">
-    
-    <!-- Facebook Domain Verification -->
-    <meta name="facebook-domain-verification" content="your-facebook-verification-code">
-    
-    <!-- Mobile App Links (if applicable) -->
-    <meta property="al:ios:app_name" content="Nature Yoga">
-    <meta property="al:ios:app_store_id" content="123456789">
-    <meta property="al:ios:url" content="natureyoga://">
-    <meta property="al:android:app_name" content="Nature Yoga">
-    <meta property="al:android:package" content="com.natureyoga.app">
-    <meta property="al:android:url" content="natureyoga://">
     
     <!-- Custom CSS Variables for Font Stack -->
     <style>
@@ -279,6 +180,24 @@
       .fonts-loaded .heading-font {
         font-family: var(--font-heading);
       }
+      
+      /* Prevent layout shift while fonts load */
+      body {
+        font-family: var(--font-primary);
+        opacity: 0;
+        transition: opacity 0.2s ease;
+      }
+      
+      .fonts-loaded body {
+        opacity: 1;
+      }
+      
+      /* Ensure text is visible even if fonts don't load */
+      @supports (font-variation-settings: normal) {
+        body {
+          font-family: 'Inter', var(--font-primary);
+        }
+      }
     </style>
   </head>
   <body>
@@ -287,12 +206,18 @@
     <!-- Main script -->
     <script type="module" src="/src/main.tsx"></script>
     
-    <!-- Razorpay checkout script - load synchronously to ensure availability -->
-    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <!-- Razorpay checkout script - load async to not block rendering -->
+    <script src="https://checkout.razorpay.com/v1/checkout.js" async></script>
     
     <!-- Font loading optimization script -->
     <script>
       (function() {
+        // Show content immediately if fonts take too long
+        const timeoutId = setTimeout(function() {
+          document.documentElement.classList.add('fonts-loaded');
+          document.body.style.opacity = '1';
+        }, 3000);
+        
         // Check if fonts are loaded
         if ('fonts' in document) {
           Promise.all([
@@ -301,22 +226,31 @@
             document.fonts.load('1em Playfair Display'),
             document.fonts.load('1em Merriweather')
           ]).then(function() {
+            clearTimeout(timeoutId);
             document.documentElement.classList.add('fonts-loaded');
+            document.body.style.opacity = '1';
             
             // Store in session storage for subsequent pages
             try {
               sessionStorage.setItem('fonts-loaded', 'true');
             } catch(e) {}
+          }).catch(function() {
+            clearTimeout(timeoutId);
+            document.documentElement.classList.add('fonts-loaded');
+            document.body.style.opacity = '1';
           });
         } else {
-          // Fallback for browsers that don't support Font Loading API
+          clearTimeout(timeoutId);
           document.documentElement.classList.add('fonts-loaded');
+          document.body.style.opacity = '1';
         }
         
         // Check if fonts were already loaded in this session
         try {
           if (sessionStorage.getItem('fonts-loaded') === 'true') {
+            clearTimeout(timeoutId);
             document.documentElement.classList.add('fonts-loaded');
+            document.body.style.opacity = '1';
           }
         } catch(e) {}
       })();
@@ -325,29 +259,23 @@
     <!-- Performance tracking (optional) -->
     <script>
       // Core Web Vitals tracking
-      window.addEventListener('load', function() {
-        setTimeout(function() {
-          // Send performance data to analytics
-          if (window.performance && window.performance.timing) {
+      if (window.performance && window.performance.timing) {
+        window.addEventListener('load', function() {
+          setTimeout(function() {
             const timing = window.performance.timing;
             const pageLoadTime = timing.loadEventEnd - timing.navigationStart;
             console.log('Page load time:', pageLoadTime, 'ms');
             
             // You can send this to your analytics
-            // gtag('event', 'timing_complete', {...});
-          }
-        }, 0);
-      });
+            // if (window.gtag) {
+            //   gtag('event', 'timing_complete', {
+            //     name: 'load',
+            //     value: pageLoadTime
+            //   });
+            // }
+          }, 0);
+        });
+      }
     </script>
-    
-    <!-- E-commerce tracking setup (commented out until implementation) -->
-    <!-- 
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      window.gtag = function(){dataLayer.push(arguments);}
-      gtag('js', new Date());
-      gtag('config', 'GA-MEASUREMENT-ID');
-    </script>
-    -->
   </body>
 </html>

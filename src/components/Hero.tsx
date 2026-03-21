@@ -111,9 +111,9 @@ const Hero = () => {
               {/* Main Image */}
               <div className="relative bg-gradient-to-br from-green-200 to-blue-200 rounded-3xl p-8 shadow-2xl">
                 <img
-                  src="https://images.pexels.com/photos/3822622/pexels-photo-3822622.jpeg"
+                  src="https://i.postimg.cc/vZ9k9dDX/honey-sticks-png-7.png"
                   alt="Meditation and Wellness"
-                  className="w-full h-96 object-cover rounded-2xl shadow-lg"
+                  className="w-90 h-90 object-cover rounded-2xl shadow-lg"
                 />
                 
                 {/* Floating Cards */}

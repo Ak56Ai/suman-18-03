@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Bell, Check, Trash2, Eye, CircleAlert as AlertCircle, CircleCheck as CheckCircle, Info, TriangleAlert as AlertTriangle } from 'lucide-react';
+import { Bell, Check, Trash2, CircleAlert as AlertCircle, CircleCheck as CheckCircle, Info, TriangleAlert as AlertTriangle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import toast from 'react-hot-toast';
 
@@ -11,14 +11,12 @@ interface NotificationSectionProps {
 
 const NotificationSection: React.FC<NotificationSectionProps> = ({ user, onUpdate }) => {
   const [notifications, setNotifications] = useState<any[]>([]);
-  const [globalMessages, setGlobalMessages] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'unread' | 'read'>('all');
 
   useEffect(() => {
     if (user?.id) {
       loadNotifications();
-      loadGlobalMessages();
     }
   }, [user?.id]);
 
@@ -37,22 +35,6 @@ const NotificationSection: React.FC<NotificationSectionProps> = ({ user, onUpdat
       toast.error('Failed to load notifications');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const loadGlobalMessages = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('global_messages')
-        .select('*')
-        .eq('is_active', true)
-        .or('expires_at.is.null,expires_at.gt.' + new Date().toISOString())
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setGlobalMessages(data || []);
-    } catch (error) {
-      console.error('Error loading global messages:', error);
     }
   };
 
@@ -191,32 +173,6 @@ const NotificationSection: React.FC<NotificationSectionProps> = ({ user, onUpdat
           </button>
         )}
       </div>
-
-      {/* Global Messages */}
-      {globalMessages.length > 0 && (
-        <div className="mb-6">
-          <h3 className="text-lg font-semibold text-gray-800 mb-3">Important Updates</h3>
-          <div className="space-y-3">
-            {globalMessages.map((message) => (
-              <div
-                key={message.id}
-                className={`p-4 rounded-lg border ${getNotificationBgColor(message.type)}`}
-              >
-                <div className="flex items-start space-x-3">
-                  {getNotificationIcon(message.type)}
-                  <div className="flex-1">
-                    <h4 className="font-semibold text-gray-900">{message.title}</h4>
-                    <p className="text-gray-700 mt-1">{message.message}</p>
-                    <p className="text-xs text-gray-500 mt-2">
-                      {new Date(message.created_at).toLocaleDateString()}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Filter Tabs */}
       <div className="flex space-x-4 mb-6">

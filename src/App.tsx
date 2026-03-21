@@ -18,6 +18,7 @@ import ReturnsPage from './pages/ReturnsPage';
 import FAQPage from './pages/FAQPage';
 import PrivacyPolicyPage from './pages/PrivacyPolicyPage';
 import { CartProvider } from './context/CartContext';
+import ProductDetailPage from './pages/ProductDetailPage';
 
 function App() {
   useEffect(() => {
@@ -58,6 +59,7 @@ function App() {
                       <Route path="/order-success/:orderId" element={<OrderSuccessPage />} />
                       <Route path="/my-orders" element={<MyOrdersPage />} />
                       <Route path="/dashboard" element={<DashboardPage />} />
+                      <Route path="/product/:id" element={<ProductDetailPage />} />
                     </Routes>
                   </main>
 
