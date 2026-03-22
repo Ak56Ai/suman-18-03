@@ -4,11 +4,22 @@ import {
   RotateCcw,
   Search,
   Calendar,
-  CircleAlert as AlertCircle,
-  CircleCheck as CheckCircle,
+  AlertCircle,
+  CheckCircle,
   Package,
   ChevronRight,
   Clock,
+  Leaf,
+  Heart,
+  Truck,
+  MapPin,
+  CreditCard,
+  DollarSign,
+  Info,
+  Loader,
+  Shield,
+  Sparkles,
+  ArrowRight
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
@@ -21,7 +32,21 @@ interface OrderInfo {
   total_amount: number;
   status: string;
   created_at: string;
+  returnable: boolean;
+  return_policy_days: number;
+  razorpay_payment_id?: string;
+  razorpay_order_id?: string;
+  payment_status?: string;
   order_items: any[];
+}
+
+interface DeliveryTracking {
+  id: string;
+  order_id: string;
+  status: number;
+  status_name: string;
+  notes: string;
+  created_at: string;
 }
 
 interface PendingOrder {
@@ -31,6 +56,9 @@ interface PendingOrder {
   created_at: string;
   days_ago: number;
   status: string;
+  returnable: boolean;
+  return_policy_days: number;
+  delivered_at?: string;
 }
 
 const ReturnsPage: React.FC = () => {
@@ -41,10 +69,14 @@ const ReturnsPage: React.FC = () => {
   const [pendingOrders, setPendingOrders] = useState<PendingOrder[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [orderInfo, setOrderInfo] = useState<OrderInfo | null>(null);
+  const [deliveryInfo, setDeliveryInfo] = useState<DeliveryTracking[]>([]);
+  const [isDelivered, setIsDelivered] = useState(false);
+  const [deliveredDate, setDeliveredDate] = useState<Date | null>(null);
   const [returnForm, setReturnForm] = useState({
     reason: '',
     comment: '',
   });
+  const [showReturnForm, setShowReturnForm] = useState(false);
 
   // Fetch pending orders for the user
   useEffect(() => {
@@ -60,32 +92,52 @@ const ReturnsPage: React.FC = () => {
     try {
       const { data: orders, error } = await supabase
         .from('orders')
-        .select('id, total_amount, status, created_at')
+        .select('id, total_amount, status, created_at, returnable, return_policy_days')
         .eq('user_id', user.id)
-        .neq('status', 'DELIVERED') // Don't show delivered orders
         .order('created_at', { ascending: false });
 
       if (error) throw error;
 
-      // Filter orders that are within 7 days and eligible for return
       const currentDate = new Date();
-      const eligibleOrders = (orders || [])
-        .map((order) => {
-          const orderDate = new Date(order.created_at);
-          const daysDifference = Math.floor(
-            (currentDate.getTime() - orderDate.getTime()) / (1000 * 3600 * 24)
-          );
-          const shortId = order.id.split('-').pop() || order.id;
+      const processedOrders = await Promise.all((orders || []).map(async (order) => {
+        const orderDate = new Date(order.created_at);
+        const daysDifference = Math.floor(
+          (currentDate.getTime() - orderDate.getTime()) / (1000 * 3600 * 24)
+        );
+        const shortId = order.id.split('-').pop() || order.id;
 
-          return {
-            ...order,
-            display_id: `RKIN-${shortId}`,
-            days_ago: daysDifference,
-          };
-        })
-        .filter((order) => order.days_ago <= 7); // Only show orders within 7 days
+        // Check if order is delivered
+        const { data: deliveryData } = await supabase
+          .from('delivery_tracking')
+          .select('created_at')
+          .eq('order_id', order.id)
+          .eq('status_name', 'Delivered')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
 
-      setPendingOrders(eligibleOrders);
+        // Check if return already exists
+        const { data: existingReturn } = await supabase
+          .from('order_returns')
+          .select('id')
+          .eq('order_id', order.id)
+          .single();
+
+        const isEligible = order.returnable && 
+                          daysDifference <= order.return_policy_days && 
+                          deliveryData && 
+                          !existingReturn;
+
+        return {
+          ...order,
+          display_id: `NATURZEN-${shortId}`,
+          days_ago: daysDifference,
+          returnable: isEligible,
+          delivered_at: deliveryData?.created_at
+        };
+      }));
+
+      setPendingOrders(processedOrders);
     } catch (error) {
       console.error('Error fetching pending orders:', error);
     } finally {
@@ -94,20 +146,20 @@ const ReturnsPage: React.FC = () => {
   };
 
   const formatOrderId = (orderId: string) => {
-    const shortId = orderId.split('-').pop() || orderId;
-    return `RKIN-${shortId}`;
+    const shortId = order.order_number || `NATURZEN-${order.id.split('-').pop()}`;
+    return `NATURZEN-${shortId}`;
   };
 
   const parseOrderId = (displayId: string) => {
-    if (displayId.startsWith('RKIN-')) {
-      return displayId.replace('RKIN-', '');
+    if (displayId.startsWith('NATURZEN-')) {
+      return displayId.replace('NATURZEN-', '');
     }
     return displayId;
   };
 
   const handleOrderClick = (orderId: string) => {
     setOrderNumber(orderId);
-    // Automatically trigger search after a short delay
+    setShowReturnForm(false);
     setTimeout(() => {
       const searchEvent = new Event('submit') as any;
       handleSearch(searchEvent);
@@ -117,7 +169,7 @@ const ReturnsPage: React.FC = () => {
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!orderNumber.trim()) {
-      toast.error('Please enter an order number');
+      toast.error('Please enter your order number');
       return;
     }
 
@@ -127,59 +179,87 @@ const ReturnsPage: React.FC = () => {
     }
 
     setLoading(true);
+    setShowReturnForm(false);
+    
     try {
       const searchId = parseOrderId(orderNumber.trim());
 
-      // Search for order by partial ID match and user
+      // Fetch order details
       const { data: orders, error: orderError } = await supabase
         .from('orders')
         .select('*')
         .eq('user_id', user.id)
-        .ilike('id', `%${searchId}%`)
+        .eq('order_number', orderNumber.trim()) // Use exact match on order_number
         .limit(1);
 
       if (orderError) throw orderError;
 
       if (!orders || orders.length === 0) {
-        toast.error('Order not found or does not belong to you.');
+        toast.error('Order not found. Please check your order number.');
         setOrderInfo(null);
+        setDeliveryInfo([]);
+        setIsDelivered(false);
         return;
       }
 
       const order = orders[0];
+      setOrderInfo(order);
 
-      // Check if order is eligible for return (within 7 days)
-      const orderDate = new Date(order.created_at);
-      const currentDate = new Date();
-      const daysDifference = Math.floor(
-        (currentDate.getTime() - orderDate.getTime()) / (1000 * 3600 * 24)
-      );
+      // Fetch delivery tracking information
+      const { data: tracking, error: trackingError } = await supabase
+        .from('delivery_tracking')
+        .select('*')
+        .eq('order_id', order.id)
+        .order('created_at', { ascending: true });
 
-      if (daysDifference > 7) {
-        toast.error(
-          'This order is not eligible for return. Return period has expired (7 days).'
-        );
-        setOrderInfo(null);
-        return;
+      if (trackingError) throw trackingError;
+      
+      setDeliveryInfo(tracking || []);
+
+      // Check if order is delivered
+      const delivered = tracking?.some(t => t.status_name === 'Delivered');
+      setIsDelivered(!!delivered);
+
+      if (delivered) {
+        const deliveredRecord = tracking?.find(t => t.status_name === 'Delivered');
+        if (deliveredRecord) {
+          setDeliveredDate(new Date(deliveredRecord.created_at));
+        }
       }
 
-      // Check if order is already returned
-      const { data: existingReturn, error: returnError } = await supabase
+      // Check if return already exists
+      const { data: existingReturn } = await supabase
         .from('order_returns')
         .select('*')
         .eq('order_id', order.id)
         .single();
 
       if (existingReturn) {
-        toast.error(
-          'A return request has already been submitted for this order.'
+        toast.error('A return request has already been submitted for this order.');
+        setShowReturnForm(false);
+      } else {
+        // Check return eligibility
+        const orderDate = new Date(order.created_at);
+        const currentDate = new Date();
+        const daysSinceOrder = Math.floor(
+          (currentDate.getTime() - orderDate.getTime()) / (1000 * 3600 * 24)
         );
-        setOrderInfo(null);
-        return;
-      }
 
-      setOrderInfo(order);
-      toast.success('Order found and eligible for return!');
+        if (!order.returnable) {
+          toast.error('This order is not eligible for return.');
+          setShowReturnForm(false);
+        } else if (!delivered) {
+          toast.error('This order can only be returned after delivery.');
+          setShowReturnForm(false);
+        } else if (daysSinceOrder > order.return_policy_days) {
+          toast.error(`Return period has expired. Returns are only accepted within ${order.return_policy_days} days of delivery.`);
+          setShowReturnForm(false);
+        } else {
+          setShowReturnForm(true);
+          toast.success('Order found and eligible for return! 🌿');
+        }
+      }
+      
     } catch (error) {
       console.error('Error fetching order:', error);
       toast.error('Failed to fetch order information');
@@ -221,51 +301,34 @@ const ReturnsPage: React.FC = () => {
       if (error) throw error;
 
       toast.success(
-        'Return request submitted successfully! We will contact you soon.'
+        'Return request submitted successfully! Our team will review and confirm within 24 hours. 🙏'
       );
       setReturnForm({ reason: '', comment: '' });
       setOrderInfo(null);
+      setDeliveryInfo([]);
       setOrderNumber('');
-
+      setShowReturnForm(false);
+      setIsDelivered(false);
+      
       // Refresh pending orders list
       fetchPendingOrders();
     } catch (error) {
       console.error('Error submitting return:', error);
-      toast.error('Failed to submit return request');
+      toast.error('Failed to submit return request. Please try again.');
     } finally {
       setSubmitting(false);
     }
   };
 
   const returnReasons = [
-    'Defective/Damaged Product',
-    'Wrong Item Received',
-    'Size/Fit Issues',
-    'Not as Described',
-    'Quality Issues',
-    'Changed Mind',
+    'Product damaged during shipping',
+    'Wrong product received',
+    'Product quality not satisfactory',
+    'Product not as described',
+    'Expired product received',
+    'Allergic reaction',
+    'Changed mind',
     'Other',
-  ];
-
-  const returnPolicies = [
-    {
-      title: '7-Day Return Policy',
-      description:
-        'Items can be returned within 7 days of delivery for a full refund.',
-      icon: <Calendar className="h-6 w-6 text-blue-600" />,
-    },
-    {
-      title: 'Original Condition',
-      description:
-        'Items must be in original condition with tags and packaging intact.',
-      icon: <CheckCircle className="h-6 w-6 text-green-600" />,
-    },
-    {
-      title: 'Quality Assurance',
-      description:
-        'We inspect all returned items to ensure they meet our quality standards.',
-      icon: <AlertCircle className="h-6 w-6 text-orange-600" />,
-    },
   ];
 
   const getStatusColor = (status: string) => {
@@ -285,21 +348,52 @@ const ReturnsPage: React.FC = () => {
     }
   };
 
+  const getDeliveryStatusIcon = (statusName: string) => {
+    switch (statusName) {
+      case 'Order Placed':
+        return <Package className="h-5 w-5" />;
+      case 'Confirmed':
+        return <CheckCircle className="h-5 w-5" />;
+      case 'Processing':
+        return <Loader className="h-5 w-5" />;
+      case 'Shipped':
+        return <Truck className="h-5 w-5" />;
+      case 'Out for Delivery':
+        return <MapPin className="h-5 w-5" />;
+      case 'Delivered':
+        return <CheckCircle className="h-5 w-5" />;
+      default:
+        return <Clock className="h-5 w-5" />;
+    }
+  };
+
+  const calculateDaysSinceDelivery = () => {
+    if (!deliveredDate) return null;
+    const currentDate = new Date();
+    const daysDiff = Math.floor(
+      (currentDate.getTime() - deliveredDate.getTime()) / (1000 * 3600 * 24)
+    );
+    return daysDiff;
+  };
+
+  const daysSinceDelivery = calculateDaysSinceDelivery();
+  const remainingDays = orderInfo?.return_policy_days ? 
+    orderInfo.return_policy_days - (daysSinceDelivery || 0) : 0;
+
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-emerald-50 flex flex-col">
       <Header />
 
       {/* Breadcrumb */}
-      <div className="bg-white border-b">
+      <div className="bg-white/80 backdrop-blur-sm border-b border-green-100">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center space-x-2 text-sm text-gray-600">
-            <a href="/" className="hover:text-green-600 transition-colors">
-              Home
+            <a href="/" className="hover:text-green-600 transition-colors flex items-center gap-1">
+              <Leaf className="w-3 h-3" />
+              <span>Home</span>
             </a>
             <ChevronRight className="h-4 w-4" />
-            <span className="text-gray-900 font-medium">
-              Returns & Exchanges
-            </span>
+            <span className="text-green-600 font-medium">Returns & Exchanges</span>
           </div>
         </div>
       </div>
@@ -314,20 +408,27 @@ const ReturnsPage: React.FC = () => {
             transition={{ duration: 0.5 }}
             className="text-center mb-12"
           >
+            <div className="inline-flex items-center gap-2 bg-green-100 rounded-full px-4 py-2 mb-4">
+              <RotateCcw className="w-4 h-4 text-green-600" />
+              <span className="text-green-700 text-sm font-medium">Easy Returns</span>
+            </div>
             <div className="flex items-center justify-center mb-4">
-              <div className="p-4 bg-green-100 rounded-full">
-                <RotateCcw className="h-12 w-12 text-green-600" />
+              <div className="p-4 bg-gradient-to-r from-green-100 to-emerald-100 rounded-full">
+                <Shield className="h-12 w-12 text-green-600" />
               </div>
             </div>
             <h1 className="text-4xl font-bold text-gray-900 mb-4">
               Returns & Exchanges
+              <span className="block bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent">
+                With Peace of Mind
+              </span>
             </h1>
             <p className="text-xl text-gray-600">
-              Easy returns within 7 days of delivery
+              Easy returns within {orderInfo?.return_policy_days || 7} days of delivery
             </p>
           </motion.div>
 
-          {/* Pending Orders List */}
+          {/* Recent Orders List */}
           {user && pendingOrders.length > 0 && (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -335,65 +436,79 @@ const ReturnsPage: React.FC = () => {
               transition={{ duration: 0.5, delay: 0.1 }}
               className="bg-white rounded-2xl shadow-lg p-6 mb-8"
             >
-              <div className="flex items-center mb-4">
-                <Package className="h-6 w-6 text-green-600 mr-2" />
-                <h2 className="text-xl font-bold text-gray-900">
-                  Your Pending Orders
-                </h2>
-                {loadingOrders && (
-                  <div className="ml-4">
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-600"></div>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center">
+                  <div className="p-2 bg-green-100 rounded-lg mr-3">
+                    <Package className="h-5 w-5 text-green-600" />
                   </div>
-                )}
+                  <h2 className="text-xl font-bold text-gray-900">Recent Orders</h2>
+                </div>
+                {loadingOrders && <Loader className="h-5 w-5 animate-spin text-green-600" />}
               </div>
 
               <p className="text-sm text-gray-600 mb-4">
-                Click on an order ID to quickly fill the search box below
+                Click on an order to initiate a return
               </p>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-3">
                 {pendingOrders.map((order) => (
                   <motion.div
                     key={order.id}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.99 }}
                     onClick={() => handleOrderClick(order.display_id)}
-                    className="border border-gray-200 rounded-xl p-4 cursor-pointer hover:border-green-500 hover:shadow-md transition-all duration-200"
+                    className={`border rounded-xl p-4 cursor-pointer transition-all ${
+                      order.returnable 
+                        ? 'border-green-200 hover:border-green-500 hover:shadow-md bg-gradient-to-r from-white to-green-50/30' 
+                        : 'border-gray-200 opacity-60 cursor-not-allowed'
+                    }`}
                   >
                     <div className="flex justify-between items-start mb-2">
-                      <div>
-                        <p className="text-sm font-mono text-gray-900">
-                          {order.display_id}
-                        </p>
-                        <p className="text-sm text-gray-500">
-                          <Clock className="h-3 w-3 inline mr-1" />
-                          {order.days_ago}{' '}
-                          {order.days_ago === 1 ? 'day' : 'days'} ago
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <p className="font-mono text-sm font-semibold text-gray-900">
+                            {order.display_id}
+                          </p>
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(order.status)}`}>
+                            {order.status}
+                          </span>
+                          {order.returnable && (
+                            <span className="px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium flex items-center gap-1">
+                              <Sparkles className="h-3 w-3" />
+                              Eligible
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
+                          <span className="flex items-center gap-1">
+                            <Calendar className="h-3 w-3" />
+                            {order.days_ago} {order.days_ago === 1 ? 'day' : 'days'} ago
+                          </span>
+                          <span className="font-semibold text-green-600">
+                            ₹{order.total_amount.toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+                      {order.returnable && (
+                        <ArrowRight className="h-5 w-5 text-green-500" />
+                      )}
+                    </div>
+                    
+                    {order.delivered_at && order.returnable && (
+                      <div className="mt-2 pt-2 border-t border-gray-100">
+                        <p className="text-xs text-gray-500 flex items-center gap-1">
+                          <CheckCircle className="h-3 w-3 text-green-500" />
+                          Delivered on {new Date(order.delivered_at).toLocaleDateString()}
                         </p>
                       </div>
-                      <span
-                        className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(
-                          order.status
-                        )}`}
-                      >
-                        {order.status}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <p className="text-sm font-medium text-gray-900">
-                        ₹{order.total_amount.toLocaleString()}
-                      </p>
-                      <p className="text-xs text-green-600">
-                        Eligible for return
-                      </p>
-                    </div>
+                    )}
                   </motion.div>
                 ))}
               </div>
             </motion.div>
           )}
 
-          {/* Return Request Form */}
+          {/* Order Search Form */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -401,29 +516,18 @@ const ReturnsPage: React.FC = () => {
             className="bg-white rounded-2xl shadow-lg p-8 mb-8"
           >
             <div className="flex items-center mb-6">
-              <div className="p-3 bg-green-100 rounded-lg mr-4">
-                <RotateCcw className="h-6 w-6 text-green-600" />
+              <div className="p-3 bg-gradient-to-r from-green-100 to-emerald-100 rounded-lg mr-4">
+                <Search className="h-6 w-6 text-green-600" />
               </div>
               <div>
                 <h2 className="text-2xl font-bold text-gray-900">
-                  Request a Return
+                  Find Your Order
                 </h2>
                 <p className="text-gray-600">
-                  Enter your order details to start the return process
+                  Enter your full order ID to check return eligibility
                 </p>
               </div>
             </div>
-
-            {!user && (
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
-                <div className="flex items-center">
-                  <AlertCircle className="h-5 w-5 text-yellow-600 mr-2" />
-                  <p className="text-yellow-800">
-                    Please login to request a return.
-                  </p>
-                </div>
-              </div>
-            )}
 
             <form onSubmit={handleSearch} className="mb-8">
               <div className="flex flex-col sm:flex-row gap-4">
@@ -433,266 +537,302 @@ const ReturnsPage: React.FC = () => {
                     type="text"
                     value={orderNumber}
                     onChange={(e) => setOrderNumber(e.target.value)}
-                    placeholder="Enter your order number (e.g., RKIN-e177e3eaa544)"
-                    className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all duration-300"
-                    disabled={loading || !user}
+                    placeholder="Enter full order ID (e.g., NATURZEN-e177e3eaa544)"
+                    className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all duration-300 bg-gray-50 hover:bg-white focus:bg-white"
+                    disabled={loading}
                   />
                 </div>
                 <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   type="submit"
-                  disabled={loading || !user}
-                  className="px-6 py-3 bg-gradient-to-r from-green-600 to-blue-600 text-white rounded-lg font-semibold hover:from-green-700 hover:to-blue-700 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                  disabled={loading}
+                  className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg font-semibold hover:from-green-700 hover:to-emerald-700 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
                 >
                   {loading ? (
-                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                    <Loader className="h-5 w-5 animate-spin" />
                   ) : (
                     <>
                       <Search className="h-5 w-5 mr-2" />
-                      Search Order
+                      Find Order
                     </>
                   )}
                 </motion.button>
               </div>
             </form>
 
-            {/* Order Information and Return Form */}
+            {/* Order Information Display */}
             {orderInfo && (
               <motion.div
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 transition={{ duration: 0.3 }}
-                className="border-t pt-8"
+                className="border-t border-gray-100 pt-8"
               >
+                {/* Order Details */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                  <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-6">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                      <Package className="h-5 w-5 text-green-600 mr-2" />
                       Order Details
                     </h3>
-                    <div className="bg-gray-50 rounded-lg p-4 space-y-2">
-                      <p>
-                        <span className="font-medium">Order ID:</span>
-                        <span className="ml-2 font-mono text-sm">
+                    <div className="space-y-3">
+                      <div className="flex justify-between py-2 border-b border-green-100">
+                        <span className="text-gray-600">Order ID:</span>
+                        <span className="font-mono text-sm font-medium">
                           {formatOrderId(orderInfo.id)}
                         </span>
-                      </p>
-                      <p>
-                        <span className="font-medium">Total Amount:</span>
-                        <span className="ml-2 font-semibold text-green-600">
+                      </div>
+                      <div className="flex justify-between py-2 border-b border-green-100">
+                        <span className="text-gray-600">Total Amount:</span>
+                        <span className="font-semibold text-green-600">
                           ₹{orderInfo.total_amount.toLocaleString()}
                         </span>
-                      </p>
-                      <p>
-                        <span className="font-medium">Status:</span>
-                        <span
-                          className={`ml-2 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(
-                            orderInfo.status
-                          )}`}
-                        >
-                          {orderInfo.status}
+                      </div>
+                      <div className="flex justify-between py-2 border-b border-green-100">
+                        <span className="text-gray-600">Payment Status:</span>
+                        <span className="font-medium text-green-600">
+                          {orderInfo.payment_status || 'Paid'}
                         </span>
-                      </p>
-                      <p>
-                        <span className="font-medium">Order Date:</span>
-                        <span className="ml-2">
+                      </div>
+                      {orderInfo.razorpay_payment_id && (
+                        <div className="flex justify-between py-2 border-b border-green-100">
+                          <span className="text-gray-600">Payment ID:</span>
+                          <span className="font-mono text-xs text-gray-600">
+                            {orderInfo.razorpay_payment_id}
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex justify-between py-2">
+                        <span className="text-gray-600">Order Date:</span>
+                        <span className="text-gray-900">
                           {new Date(orderInfo.created_at).toLocaleDateString()}
                         </span>
-                      </p>
+                      </div>
                     </div>
                   </div>
 
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                  <div className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl p-6">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                      <CheckCircle className="h-5 w-5 text-blue-600 mr-2" />
                       Return Eligibility
                     </h3>
-                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                      <div className="flex items-center">
-                        <CheckCircle className="h-5 w-5 text-green-600 mr-2" />
-                        <p className="text-green-800 font-medium">
-                          Eligible for Return
-                        </p>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between py-2 border-b border-blue-100">
+                        <span className="text-gray-600">Return Policy:</span>
+                        <span className="font-medium text-blue-600">
+                          {orderInfo.return_policy_days} days
+                        </span>
                       </div>
-                      <p className="text-green-700 text-sm mt-1">
-                        This order is within the 7-day return window.
-                      </p>
+                      {deliveredDate && (
+                        <>
+                          <div className="flex items-center justify-between py-2 border-b border-blue-100">
+                            <span className="text-gray-600">Delivered On:</span>
+                            <span className="text-gray-900">
+                              {deliveredDate.toLocaleDateString()}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between py-2 border-b border-blue-100">
+                            <span className="text-gray-600">Days Since Delivery:</span>
+                            <span className={`font-semibold ${
+                              daysSinceDelivery && daysSinceDelivery <= orderInfo.return_policy_days
+                                ? 'text-green-600'
+                                : 'text-red-600'
+                            }`}>
+                              {daysSinceDelivery} days
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between py-2">
+                            <span className="text-gray-600">Remaining Days:</span>
+                            <span className="font-semibold text-green-600">
+                              {remainingDays} days
+                            </span>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
 
-                {/* Return Form */}
-                <form onSubmit={handleSubmitReturn} className="space-y-6">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Reason for Return <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      name="reason"
-                      value={returnForm.reason}
-                      onChange={handleInputChange}
-                      required
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all duration-300"
-                      disabled={submitting}
-                    >
-                      <option value="">Select a reason</option>
-                      {returnReasons.map((reason) => (
-                        <option key={reason} value={reason}>
-                          {reason}
-                        </option>
+                {/* Delivery Tracking Timeline */}
+                {deliveryInfo.length > 0 && (
+                  <div className="mb-8">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                      <Truck className="h-5 w-5 text-blue-600 mr-2" />
+                      Delivery Timeline
+                    </h3>
+                    <div className="space-y-3">
+                      {deliveryInfo.map((tracking, index) => (
+                        <div
+                          key={tracking.id}
+                          className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg"
+                        >
+                          <div className={`p-2 rounded-full ${
+                            tracking.status_name === 'Delivered'
+                              ? 'bg-green-100 text-green-600'
+                              : 'bg-blue-100 text-blue-600'
+                          }`}>
+                            {getDeliveryStatusIcon(tracking.status_name)}
+                          </div>
+                          <div className="flex-1">
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <p className="font-medium text-gray-900">
+                                  {tracking.status_name}
+                                </p>
+                                {tracking.notes && (
+                                  <p className="text-sm text-gray-500 mt-1">
+                                    {tracking.notes}
+                                  </p>
+                                )}
+                              </div>
+                              <p className="text-xs text-gray-400">
+                                {new Date(tracking.created_at).toLocaleString()}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
                       ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Additional Comments
-                    </label>
-                    <textarea
-                      name="comment"
-                      value={returnForm.comment}
-                      onChange={handleInputChange}
-                      rows={4}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent resize-none transition-all duration-300"
-                      placeholder="Please provide additional details about your return request..."
-                      disabled={submitting}
-                      maxLength={500}
-                    />
-                    <div className="flex justify-between items-center mt-1">
-                      <p className="text-xs text-gray-500">
-                        {returnForm.comment.length}/500 characters
-                      </p>
-                      {returnForm.comment.length > 400 && (
-                        <p className="text-xs text-orange-500">
-                          Approaching character limit
-                        </p>
-                      )}
                     </div>
                   </div>
+                )}
 
-                  <motion.button
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    type="submit"
-                    disabled={submitting}
-                    className="w-full bg-gradient-to-r from-green-600 to-blue-600 text-white py-4 rounded-lg font-semibold hover:from-green-700 hover:to-blue-700 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center shadow-lg hover:shadow-xl"
-                  >
-                    {submitting ? (
-                      <div className="flex items-center">
-                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                        Submitting...
+                {/* Return Form */}
+                {showReturnForm && (
+                  <form onSubmit={handleSubmitReturn} className="space-y-6">
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+                      <div className="flex items-start">
+                        <Info className="h-5 w-5 text-yellow-600 mt-0.5 mr-2 flex-shrink-0" />
+                        <div>
+                          <p className="text-sm text-yellow-800 font-medium">
+                            Return Confirmation Required
+                          </p>
+                          <p className="text-xs text-yellow-700 mt-1">
+                            Please confirm that you want to return this order. Our team will review your request and confirm within 24 hours.
+                          </p>
+                        </div>
                       </div>
-                    ) : (
-                      <>
-                        <RotateCcw className="h-5 w-5 mr-2" />
-                        Submit Return Request
-                      </>
-                    )}
-                  </motion.button>
-                </form>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Reason for Return <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        name="reason"
+                        value={returnForm.reason}
+                        onChange={handleInputChange}
+                        required
+                        className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent bg-gray-50 hover:bg-white focus:bg-white"
+                        disabled={submitting}
+                      >
+                        <option value="">Select a reason</option>
+                        {returnReasons.map((reason) => (
+                          <option key={reason} value={reason}>
+                            {reason}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Additional Comments (Optional)
+                      </label>
+                      <textarea
+                        name="comment"
+                        value={returnForm.comment}
+                        onChange={handleInputChange}
+                        rows={4}
+                        className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent resize-none bg-gray-50 hover:bg-white focus:bg-white"
+                        placeholder="Please provide any additional details to help us process your return..."
+                        disabled={submitting}
+                        maxLength={500}
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        {returnForm.comment.length}/500 characters
+                      </p>
+                    </div>
+
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      type="submit"
+                      disabled={submitting}
+                      className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white py-4 rounded-lg font-semibold hover:from-green-700 hover:to-emerald-700 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center shadow-lg"
+                    >
+                      {submitting ? (
+                        <>
+                          <Loader className="h-5 w-5 animate-spin mr-2" />
+                          Submitting Request...
+                        </>
+                      ) : (
+                        <>
+                          <RotateCcw className="h-5 w-5 mr-2" />
+                          Confirm & Submit Return Request
+                        </>
+                      )}
+                    </motion.button>
+                    
+                    <p className="text-xs text-center text-gray-500">
+                      By submitting, you confirm that you've reviewed the return policy and agree to the terms.
+                      Our team will review your request and confirm within 24 hours.
+                    </p>
+                  </form>
+                )}
               </motion.div>
             )}
           </motion.div>
 
           {/* Return Policy Information */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            {returnPolicies.map((policy, index) => (
-              <motion.div
-                key={index}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.1 + 0.3 }}
-                className="bg-white rounded-xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-300"
-              >
-                <div className="flex items-center mb-4">
-                  <div className="p-3 bg-gray-50 rounded-lg">{policy.icon}</div>
-                  <h3 className="text-lg font-semibold text-gray-900 ml-3">
-                    {policy.title}
-                  </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="bg-white rounded-xl shadow-lg p-6">
+              <div className="flex items-center mb-4">
+                <div className="p-3 bg-blue-100 rounded-lg">
+                  <Calendar className="h-6 w-6 text-blue-600" />
                 </div>
-                <p className="text-gray-600 text-sm leading-relaxed">
-                  {policy.description}
-                </p>
-              </motion.div>
-            ))}
-          </div>
-
-          {/* Detailed Return Policy */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.4 }}
-            className="bg-white rounded-2xl shadow-lg p-8"
-          >
-            <h2 className="text-2xl font-bold text-gray-900 mb-6">
-              Return Policy Details
-            </h2>
-            <div className="space-y-6">
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                  Eligible Items
+                <h3 className="text-lg font-semibold text-gray-900 ml-3">
+                  {orderInfo?.return_policy_days || 7}-Day Return Window
                 </h3>
-                <ul className="text-gray-600 space-y-1">
-                  <li>• Items must be returned within 7 days of delivery</li>
-                  <li>
-                    • Products must be in original condition with tags attached
-                  </li>
-                  <li>• Original packaging must be intact</li>
-                  <li>• Items should be unused and unwashed</li>
-                </ul>
               </div>
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                  Return Process
-                </h3>
-                <ol className="text-gray-600 space-y-1 list-decimal list-inside">
-                  <li>Submit a return request using the form above</li>
-                  <li>Our team will review your request within 24 hours</li>
-                  <li>
-                    If approved, we'll provide return shipping instructions
-                  </li>
-                  <li>Pack the item securely and ship it back to us</li>
-                  <li>
-                    Refund will be processed within 5-7 business days after we
-                    receive the item
-                  </li>
-                </ol>
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                  Refund Information
-                </h3>
-                <p className="text-gray-600">
-                  Refunds will be processed to the original payment method. For
-                  COD orders, refunds will be processed via bank transfer or
-                  UPI. Processing time may vary depending on your bank or
-                  payment provider.
-                </p>
-              </div>
-            </div>
-
-            {/* Non-Returnable Items */}
-            <div className="mt-6 pt-6 border-t border-gray-200">
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                Non-Returnable Items
-              </h3>
               <p className="text-gray-600 text-sm">
-                The following items cannot be returned: perishable goods,
-                personal care items, intimate apparel, and items marked as
-                "Final Sale". Please check product descriptions for specific
-                return eligibility.
+                Returns accepted within {orderInfo?.return_policy_days || 7} days of delivery
               </p>
             </div>
-          </motion.div>
+            
+            <div className="bg-white rounded-xl shadow-lg p-6">
+              <div className="flex items-center mb-4">
+                <div className="p-3 bg-green-100 rounded-lg">
+                  <CheckCircle className="h-6 w-6 text-green-600" />
+                </div>
+                <h3 className="text-lg font-semibold text-gray-900 ml-3">
+                  Original Condition
+                </h3>
+              </div>
+              <p className="text-gray-600 text-sm">
+                Products must be unused with original packaging intact
+              </p>
+            </div>
+            
+            <div className="bg-white rounded-xl shadow-lg p-6">
+              <div className="flex items-center mb-4">
+                <div className="p-3 bg-purple-100 rounded-lg">
+                  <Shield className="h-6 w-6 text-purple-600" />
+                </div>
+                <h3 className="text-lg font-semibold text-gray-900 ml-3">
+                  Quality Assurance
+                </h3>
+              </div>
+              <p className="text-gray-600 text-sm">
+                Every return is inspected to ensure quality standards
+              </p>
+            </div>
+          </div>
 
           {/* Need Help */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.5, delay: 0.5 }}
-            className="text-center mt-8"
-          >
+          <div className="text-center mt-8">
             <p className="text-gray-500 text-sm">
-              Need assistance with your return? Contact our{' '}
+              Need assistance? Contact our{' '}
               <a
                 href="/contact"
                 className="text-green-600 hover:text-green-700 font-medium hover:underline"
@@ -700,7 +840,7 @@ const ReturnsPage: React.FC = () => {
                 customer support team
               </a>
             </p>
-          </motion.div>
+          </div>
         </div>
       </main>
 

@@ -23,20 +23,47 @@ const OrderSuccessPage = () => {
 
   const fetchOrder = async () => {
     try {
-      const { data, error } = await supabase
+      // Fetch order details
+      const { data: orderData, error: orderError } = await supabase
         .from('orders')
-        .select(`
-          *,
-          order_items(*),
-          delivery_tracking(*)
-        `)
+        .select('*')
         .eq('id', orderId)
         .single();
 
-      if (error) throw error;
-      setOrder(data);
-      setOrderItems(data.order_items || []);
-      setDeliveryTracking(data.delivery_tracking || []);
+      if (orderError) throw orderError;
+
+      // Fetch order items - USE DISTINCT to avoid duplicates
+      const { data: itemsData, error: itemsError } = await supabase
+        .from('order_items')
+        .select('*')
+        .eq('order_id', orderId);
+
+      if (itemsError) throw itemsError;
+
+      // Remove duplicates by product_id (in case of any duplicate entries)
+      const uniqueItems = [];
+      const seenProductIds = new Set();
+      
+      for (const item of (itemsData || [])) {
+        if (!seenProductIds.has(item.product_id)) {
+          seenProductIds.add(item.product_id);
+          uniqueItems.push(item);
+        }
+      }
+
+      // Fetch delivery tracking
+      const { data: trackingData, error: trackingError } = await supabase
+        .from('delivery_tracking')
+        .select('*')
+        .eq('order_id', orderId)
+        .order('created_at', { ascending: true });
+
+      if (trackingError) throw trackingError;
+
+      setOrder(orderData);
+      setOrderItems(uniqueItems);
+      setDeliveryTracking(trackingData || []);
+      
     } catch (error) {
       console.error('Error fetching order:', error);
       toast.error('Failed to load order details');
@@ -45,9 +72,31 @@ const OrderSuccessPage = () => {
     }
   };
 
-  const formatOrderId = (orderId: string) => {
-    const lastPart = orderId.split('-').pop() || '';
-    return `RKIN-${lastPart}`;
+  // Format order number correctly
+  const formatOrderId = () => {
+    if (!order) return 'RKIN-XXXXX';
+    
+    // If order has order_number field, use it
+    if (order.order_number) {
+      return order.order_number;
+    }
+    
+    // Generate from created_at if order_number doesn't exist
+    if (order.created_at) {
+      const date = new Date(order.created_at);
+      const yy = date.getFullYear().toString().slice(-2);
+      const mm = (date.getMonth() + 1).toString().padStart(2, '0');
+      const dd = date.getDate().toString().padStart(2, '0');
+      
+      // Get sequential number for the day
+      // This is approximate - actual number should come from database
+      const shortId = order.id.split('-').pop() || '';
+      const seqNum = shortId.slice(0, 8).padStart(8, '0');
+      
+      return `RKIN-${yy}${mm}${dd}-${seqNum}`;
+    }
+    
+    return `RKIN-${order.id.split('-').pop() || 'XXXXX'}`;
   };
 
   const getCurrentDeliveryStatus = () => {
@@ -57,9 +106,14 @@ const OrderSuccessPage = () => {
 
   const handleDownloadInvoice = () => {
     if (order) {
-      generateInvoicePDF(order);
+      const orderWithDisplay = {
+        ...order,
+        display_id: formatOrderId()
+      };
+      generateInvoicePDF(orderWithDisplay);
     }
   };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'PAID':
@@ -85,6 +139,9 @@ const OrderSuccessPage = () => {
         return status;
     }
   };
+
+  // Calculate correct total from items (to verify)
+  const calculatedTotal = orderItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
 
   if (loading) {
     return (
@@ -138,12 +195,17 @@ const OrderSuccessPage = () => {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-gray-600">Order ID</p>
-                  <p className="font-mono font-semibold text-gray-900">{formatOrderId(order.id)}</p>
+                  <p className="font-mono font-semibold text-gray-900">{formatOrderId()}</p>
                 </div>
                 <div className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(order.status)}`}>
                   {getStatusText(order.status)}
                 </div>
               </div>
+              {Math.abs(order.total_amount - calculatedTotal) > 0.01 && (
+                <div className="mt-2 text-xs text-orange-600">
+                  Note: Order total (₹{order.total_amount}) differs from items total (₹{calculatedTotal})
+                </div>
+              )}
             </div>
           </div>
         </motion.div>
@@ -168,14 +230,16 @@ const OrderSuccessPage = () => {
               </div>
               
               <div className="text-gray-700">
-                <p className="font-semibold">{order.shipping_address.fullName}</p>
-                <p>{order.shipping_address.address}</p>
-                <p>{order.shipping_address.city}, {order.shipping_address.state} {order.shipping_address.pincode}</p>
+                <p className="font-semibold">{order.shipping_address?.fullName || order.shipping_address?.name}</p>
+                <p>{order.shipping_address?.address || order.shipping_address?.address_line_1}</p>
+                <p>
+                  {order.shipping_address?.city}, {order.shipping_address?.state} {order.shipping_address?.pincode || order.shipping_address?.postal_code}
+                </p>
                 <p className="mt-2">
-                  <span className="text-gray-600">Phone:</span> {order.shipping_address.phone}
+                  <span className="text-gray-600">Phone:</span> {order.shipping_address?.phone}
                 </p>
                 <p>
-                  <span className="text-gray-600">Email:</span> {order.shipping_address.email}
+                  <span className="text-gray-600">Email:</span> {order.shipping_address?.email}
                 </p>
               </div>
             </div>
@@ -196,9 +260,12 @@ const OrderSuccessPage = () => {
           className="mt-8 text-center space-y-4"
         >
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <button className="flex items-center justify-center bg-green-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-green-700 transition-colors">
+            <button 
+              onClick={handleDownloadInvoice}
+              className="flex items-center justify-center bg-green-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-green-700 transition-colors"
+            >
               <Download className="mr-2 h-5 w-5" />
-              <span onClick={handleDownloadInvoice}>Download Invoice</span>
+              Download Invoice
             </button>
             
             <Link
