@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useCart } from '../context/CartContext';
-import { useAuth } from '../hooks/useAuth'; // Changed from useAuthContext to useAuth
+import { useAuth } from '../hooks/useAuth';
 import toast from 'react-hot-toast';
 import RatingComponent from '../components/product/RatingComponent';
 import CommentSection from '../components/product/CommentSection';
@@ -38,7 +38,7 @@ interface Product {
   shelf_life: string;
   product_story: string;
   specifications: any[];
-  banners: string[];
+  banners: any[]; // Change this to any[] since banners are objects now
   rating_average: number;
   rating_count: number;
 }
@@ -47,7 +47,7 @@ const ProductDetailPage = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { addToCart } = useCart();
-  const { user } = useAuth(); // Using useAuth hook from hooks folder
+  const { user } = useAuth();
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedImage, setSelectedImage] = useState(0);
@@ -61,22 +61,63 @@ const ProductDetailPage = () => {
     fetchProduct();
     checkWishlist();
     fetchUserRating();
-  }, [id, user]); // Added user as dependency
+  }, [id, user]);
 
   const fetchProduct = async () => {
-    const { data, error } = await supabase
-      .from('products')
-      .select('*')
-      .eq('id', id)
-      .single();
+    setLoading(true);
+    try {
+      // Fetch product details
+      const { data: productData, error: productError } = await supabase
+        .from('products')
+        .select('*')
+        .eq('id', id)
+        .single();
 
-    if (error) {
+      if (productError) throw productError;
+
+      // Fetch banners for this product
+      const { data: bannersData, error: bannersError } = await supabase
+        .from('product_banners')
+        .select('*')
+        .eq('product_id', id)
+        .eq('is_active', true)
+        .order('display_order', { ascending: true });
+
+      if (bannersError) {
+        console.error('Error fetching banners:', bannersError);
+      }
+
+      // Parse images if stored as JSON string
+      let images = [];
+      if (productData.images) {
+        if (typeof productData.images === 'string') {
+          try {
+            images = JSON.parse(productData.images);
+          } catch {
+            images = [productData.image_url];
+          }
+        } else if (Array.isArray(productData.images)) {
+          images = productData.images;
+        } else {
+          images = [productData.image_url];
+        }
+      } else {
+        images = [productData.image_url];
+      }
+
+      setProduct({
+        ...productData,
+        images: images,
+        banners: bannersData || [] // Store full banner objects
+      });
+      
+    } catch (error) {
+      console.error('Error fetching product:', error);
       toast.error('Product not found');
       navigate('/products');
-    } else {
-      setProduct(data);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const checkWishlist = async () => {
@@ -418,7 +459,6 @@ const ProductDetailPage = () => {
                   userRating={userRating}
                   onRatingSubmit={() => fetchUserRating()}
                   onRatingCountChange={(count) => {
-                    // Optionally update product rating count in state
                     console.log(`Total ratings: ${count}`);
                   }}
                 />
@@ -428,8 +468,8 @@ const ProductDetailPage = () => {
           </div>
         </div>
 
-        {/* Product Banners */}
-        {product.banners?.length > 0 && (
+        {/* Product Banners - Pass the full banner objects */}
+        {product.banners && product.banners.length > 0 && (
           <ProductBanners banners={product.banners} />
         )}
 

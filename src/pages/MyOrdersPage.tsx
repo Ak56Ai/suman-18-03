@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Package, Calendar, CreditCard, Truck, Eye, Download } from 'lucide-react';
+import { Package, Calendar, CreditCard, Truck, Eye, Download, RotateCcw, CheckCircle, Clock } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { getCurrentUser } from '../lib/auth';
 import toast from 'react-hot-toast';
 
 interface Order {
   id: string;
+  order_number: string;
   total_amount: number;
   status: string;
   payment_method: string;
@@ -32,17 +33,46 @@ const MyOrdersPage = () => {
         return;
       }
 
-      const { data, error } = await supabase
+      const { data: ordersData, error: ordersError } = await supabase
         .from('orders')
-        .select(`
-          *,
-          delivery_tracking(*)
-        `)
+        .select('*')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
-      setOrders(data || []);
+      if (ordersError) throw ordersError;
+
+      if (!ordersData || ordersData.length === 0) {
+        setOrders([]);
+        setLoading(false);
+        return;
+      }
+
+      const ordersWithItems = await Promise.all(
+        ordersData.map(async (order) => {
+          const { data: itemsData, error: itemsError } = await supabase
+            .from('order_items')
+            .select('*')
+            .eq('order_id', order.id);
+
+          if (itemsError) console.error('Error fetching items:', itemsError);
+
+          const { data: trackingData, error: trackingError } = await supabase
+            .from('delivery_tracking')
+            .select('*')
+            .eq('order_id', order.id)
+            .order('created_at', { ascending: true });
+
+          if (trackingError) console.error('Error fetching tracking:', trackingError);
+
+          return {
+            ...order,
+            order_items: itemsData || [],
+            delivery_tracking: trackingData || []
+          };
+        })
+      );
+
+      setOrders(ordersWithItems);
     } catch (error) {
       console.error('Error fetching orders:', error);
       toast.error('Failed to load orders');
@@ -54,17 +84,17 @@ const MyOrdersPage = () => {
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'PAID':
-        return 'text-green-600 bg-green-100';
+        return 'text-green-600 bg-green-100 border-green-200';
       case 'COD_PENDING':
-        return 'text-blue-600 bg-blue-100';
+        return 'text-blue-600 bg-blue-100 border-blue-200';
       case 'PENDING':
-        return 'text-yellow-600 bg-yellow-100';
+        return 'text-yellow-600 bg-yellow-100 border-yellow-200';
       case 'SHIPPED':
-        return 'text-purple-600 bg-purple-100';
+        return 'text-purple-600 bg-purple-100 border-purple-200';
       case 'DELIVERED':
-        return 'text-green-600 bg-green-100';
+        return 'text-emerald-600 bg-emerald-100 border-emerald-200';
       default:
-        return 'text-gray-600 bg-gray-100';
+        return 'text-gray-600 bg-gray-100 border-gray-200';
     }
   };
 
@@ -85,9 +115,35 @@ const MyOrdersPage = () => {
     }
   };
 
-  const formatOrderId = (orderId: string) => {
-    const lastPart = orderId.split('-').pop() || '';
-    return `RKIN-${lastPart}`;
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'PAID':
+        return <CheckCircle className="h-4 w-4" />;
+      case 'COD_PENDING':
+        return <Clock className="h-4 w-4" />;
+      case 'PENDING':
+        return <Clock className="h-4 w-4" />;
+      case 'SHIPPED':
+        return <Truck className="h-4 w-4" />;
+      case 'DELIVERED':
+        return <CheckCircle className="h-4 w-4" />;
+      default:
+        return <Package className="h-4 w-4" />;
+    }
+  };
+
+  const formatOrderId = (order: Order | any) => {
+    if (order.order_number) {
+      return order.order_number;
+    }
+    
+    if (order.id) {
+      const uuidWithoutHyphens = order.id.replace(/-/g, '');
+      const last12Chars = uuidWithoutHyphens.slice(-12);
+      return `RKIN-${last12Chars}`;
+    }
+    
+    return 'RKIN-XXXXXX';
   };
 
   const getCurrentDeliveryStatus = (deliveryTracking: any[]) => {
@@ -95,17 +151,19 @@ const MyOrdersPage = () => {
     return Math.max(...deliveryTracking.map(dt => dt.status));
   };
 
+  const getDeliveryProgress = (deliveryTracking: any[]) => {
+    if (!deliveryTracking || deliveryTracking.length === 0) return 0;
+    const maxStatus = 7;
+    const currentStatus = Math.max(...deliveryTracking.map(dt => dt.status));
+    return (currentStatus / maxStatus) * 100;
+  };
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 pt-20">
+      <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-emerald-50 pt-20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <div className="animate-pulse">
-            <div className="h-8 bg-gray-300 rounded w-64 mb-8"></div>
-            <div className="space-y-4">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="bg-gray-300 rounded-lg h-32"></div>
-              ))}
-            </div>
+          <div className="flex items-center justify-center min-h-[60vh]">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600"></div>
           </div>
         </div>
       </div>
@@ -114,113 +172,138 @@ const MyOrdersPage = () => {
 
   if (orders.length === 0) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 pt-20">
+      <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-emerald-50 pt-20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-            className="text-center"
-          >
+          <div className="text-center">
             <div className="bg-white rounded-2xl shadow-xl p-12">
-              <Package className="h-24 w-24 text-gray-300 mx-auto mb-6" />
+              <Package className="h-24 w-24 text-green-300 mx-auto mb-6" />
               <h2 className="text-3xl font-bold text-gray-900 mb-4">No Orders Yet</h2>
               <p className="text-gray-600 mb-8 text-lg">
                 You haven't placed any orders yet. Start shopping to see your orders here.
               </p>
               <Link
                 to="/"
-                className="inline-flex items-center bg-gradient-to-r from-green-600 to-blue-600 text-white px-8 py-4 rounded-full font-semibold hover:from-green-700 hover:to-blue-700 transition-all duration-300 shadow-lg hover:shadow-xl transform hover:scale-105"
+                className="inline-flex items-center bg-gradient-to-r from-green-600 to-emerald-600 text-white px-8 py-4 rounded-full font-semibold hover:from-green-700 hover:to-emerald-700 transition-all duration-300 shadow-lg hover:shadow-xl"
               >
                 Start Shopping
+                <Truck className="h-5 w-5 ml-2" />
               </Link>
             </div>
-          </motion.div>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 pt-20">
+    <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-emerald-50 pt-20">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6 }}
-        >
-          <div className="flex items-center mb-8">
-            <Package className="h-8 w-8 text-green-600 mr-3" />
-            <h1 className="text-3xl font-bold text-gray-900">My Orders</h1>
-            <span className="ml-4 bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-medium">
-              {orders.length} orders
-            </span>
+        <div className="mb-8">
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div className="flex items-center">
+              <Package className="h-8 w-8 text-green-600 mr-3" />
+              <h1 className="text-3xl font-bold text-gray-900">My Orders</h1>
+              <span className="ml-4 bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-medium">
+                {orders.length} {orders.length === 1 ? 'order' : 'orders'}
+              </span>
+            </div>
+            <RotateCcw className="h-5 w-5 text-gray-400 cursor-pointer hover:text-green-600 transition-colors" />
           </div>
+        </div>
 
-          <div className="space-y-6">
-            {orders.map((order, index) => (
-              <motion.div
-                key={order.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5, delay: index * 0.1 }}
-                className="bg-white rounded-xl shadow-lg p-6 hover:shadow-xl transition-shadow"
-              >
-                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-4">
-                  <div className="flex items-center space-x-4 mb-4 lg:mb-0">
-                    <div className="bg-green-100 p-3 rounded-full">
+        <div className="space-y-6">
+          {orders.map((order, index) => (
+            <motion.div
+              key={order.id}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: index * 0.1 }}
+              whileHover={{ y: -5, boxShadow: "0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)" }}
+              className="bg-white rounded-2xl shadow-lg transition-all duration-300 overflow-hidden"
+            >
+              {/* Order Header */}
+              <div className="bg-gradient-to-r from-green-50 to-emerald-50 p-6 border-b border-green-100">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                  <div className="flex items-center space-x-4">
+                    <div className="bg-gradient-to-r from-green-100 to-emerald-100 p-3 rounded-full">
                       <Package className="h-6 w-6 text-green-600" />
                     </div>
                     <div>
-                      <h3 className="font-bold text-gray-900">
-                        Order #{formatOrderId(order.id)}
+                      <h3 className="font-bold text-gray-900 text-lg">
+                        {formatOrderId(order)}
                       </h3>
-                      <p className="text-gray-600 text-sm flex items-center">
-                        <Calendar className="h-4 w-4 mr-1" />
+                      <p className="text-gray-600 text-sm flex items-center mt-1">
+                        <Calendar className="h-4 w-4 mr-1 text-green-500" />
                         {new Date(order.created_at).toLocaleDateString('en-IN', {
                           year: 'numeric',
                           month: 'long',
-                          day: 'numeric'
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
                         })}
                       </p>
                     </div>
                   </div>
 
                   <div className="flex items-center space-x-4">
-                    <div className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(order.status)}`}>
+                    <div className={`px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 ${getStatusColor(order.status)}`}>
+                      {getStatusIcon(order.status)}
                       {getStatusText(order.status)}
                     </div>
                     <div className="text-right">
-                      <p className="font-bold text-gray-900">₹{order.total_amount.toFixed(2)}</p>
-                      <p className="text-gray-600 text-sm flex items-center">
-                        <CreditCard className="h-4 w-4 mr-1" />
+                      <p className="font-bold text-2xl text-green-600">
+                        ₹{order.total_amount.toFixed(2)}
+                      </p>
+                      <p className="text-gray-600 text-sm flex items-center justify-end gap-1">
+                        <CreditCard className="h-3 w-3" />
                         {order.payment_method === 'cod' ? 'Cash on Delivery' : 'Online Payment'}
                       </p>
                     </div>
                   </div>
                 </div>
+              </div>
 
-                {/* Order Items Summary */}
-                <div className="bg-gray-50 rounded-lg p-4 mb-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-gray-600 text-sm">
-                        {order.order_items.length} item{order.order_items.length > 1 ? 's' : ''}
+              {/* Order Items Summary */}
+              <div className="p-6">
+                <div className="bg-gray-50 rounded-xl p-4 mb-4">
+                  <div className="flex items-center justify-between flex-wrap gap-4">
+                    <div className="flex-1">
+                      <p className="text-gray-600 text-sm mb-1">
+                        {order.order_items.length} item{order.order_items.length > 1 ? 's' : ''} in this order
                       </p>
-                      <p className="font-medium text-gray-900">
-                        {order.order_items.slice(0, 2).map(item => item.product_name).join(', ')}
-                        {order.order_items.length > 2 && ` +${order.order_items.length - 2} more`}
-                      </p>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <div className="text-center">
-                        <div className="text-sm text-gray-600">Delivery Status</div>
-                        <div className="flex items-center text-green-600">
-                          <Truck className="h-4 w-4 mr-1" />
-                          <span className="text-sm font-medium">
-                            Stage {getCurrentDeliveryStatus(order.delivery_tracking || [])} of 7
+                      <div className="flex flex-wrap gap-2">
+                        {order.order_items.slice(0, 3).map((item, idx) => (
+                          <span
+                            key={item.id}
+                            className="inline-flex items-center gap-1 bg-white px-3 py-1 rounded-full text-sm text-gray-700 shadow-sm"
+                          >
+                            <Package className="h-3 w-3 text-green-500" />
+                            {item.product_name}
+                            <span className="text-gray-400">x{item.quantity}</span>
                           </span>
+                        ))}
+                        {order.order_items.length > 3 && (
+                          <span className="inline-flex items-center px-3 py-1 rounded-full text-sm bg-gray-200 text-gray-600">
+                            +{order.order_items.length - 3} more
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {/* Delivery Progress */}
+                    <div className="min-w-[200px]">
+                      <div className="text-sm text-gray-600 mb-1">Delivery Progress</div>
+                      <div className="flex items-center gap-2">
+                        <Truck className="h-4 w-4 text-green-600" />
+                        <div className="flex-1 bg-gray-200 rounded-full h-2">
+                          <div
+                            className="bg-gradient-to-r from-green-600 to-emerald-600 h-2 rounded-full transition-all duration-500"
+                            style={{ width: `${getDeliveryProgress(order.delivery_tracking || [])}%` }}
+                          />
                         </div>
+                        <span className="text-sm font-medium text-green-600">
+                          {getCurrentDeliveryStatus(order.delivery_tracking || [])}/7
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -230,26 +313,29 @@ const MyOrdersPage = () => {
                 <div className="flex flex-col sm:flex-row gap-3">
                   <Link
                     to={`/order-success/${order.id}`}
-                    className="flex items-center justify-center bg-green-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-green-700 transition-colors"
+                    className="flex items-center justify-center bg-gradient-to-r from-green-600 to-emerald-600 text-white px-4 py-2.5 rounded-lg font-medium hover:from-green-700 hover:to-emerald-700 transition-all duration-300 shadow-md hover:shadow-lg"
                   >
                     <Eye className="h-4 w-4 mr-2" />
                     View Details
                   </Link>
                   
-                  <button className="flex items-center justify-center border-2 border-green-600 text-green-600 px-4 py-2 rounded-lg font-medium hover:bg-green-600 hover:text-white transition-colors">
+                  <button className="flex items-center justify-center border-2 border-green-600 text-green-600 px-4 py-2.5 rounded-lg font-medium hover:bg-green-600 hover:text-white transition-all duration-300">
                     <Download className="h-4 w-4 mr-2" />
                     Download Invoice
                   </button>
 
-                  <button className="flex items-center justify-center border border-gray-300 text-gray-700 px-4 py-2 rounded-lg font-medium hover:bg-gray-50 transition-colors">
+                  <Link
+                    to={`/track-order/${order.id}`}
+                    className="flex items-center justify-center border border-gray-300 text-gray-700 px-4 py-2.5 rounded-lg font-medium hover:bg-gray-50 transition-all duration-300"
+                  >
                     <Truck className="h-4 w-4 mr-2" />
                     Track Order
-                  </button>
+                  </Link>
                 </div>
-              </motion.div>
-            ))}
-          </div>
-        </motion.div>
+              </div>
+            </motion.div>
+          ))}
+        </div>
       </div>
     </div>
   );

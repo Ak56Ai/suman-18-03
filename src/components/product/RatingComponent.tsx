@@ -1,6 +1,6 @@
 // src/components/product/RatingComponent.tsx
 import React, { useState, useEffect } from 'react';
-import { Star, ThumbsUp, Flag, ChevronDown, ChevronUp, Loader } from 'lucide-react';
+import { Star, ThumbsUp, Flag, ChevronDown, ChevronUp, Loader, RefreshCw } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import toast from 'react-hot-toast';
@@ -11,6 +11,7 @@ interface RatingProps {
   userRating: number | null;
   onRatingSubmit: () => void;
   onRatingCountChange?: (count: number) => void;
+  onRefreshProduct?: () => void; // Add refresh function prop
 }
 
 interface Review {
@@ -30,7 +31,8 @@ const RatingComponent: React.FC<RatingProps> = ({
   productId, 
   userRating, 
   onRatingSubmit,
-  onRatingCountChange 
+  onRatingCountChange,
+  onRefreshProduct 
 }) => {
   const { user } = useAuth();
   const [rating, setRating] = useState<number>(userRating || 0);
@@ -41,6 +43,7 @@ const RatingComponent: React.FC<RatingProps> = ({
   const [allRatings, setAllRatings] = useState<Review[]>([]);
   const [showAllReviews, setShowAllReviews] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [ratingStats, setRatingStats] = useState({
     average: 0,
     total: 0,
@@ -62,7 +65,7 @@ const RatingComponent: React.FC<RatingProps> = ({
     try {
       setLoading(true);
       
-      // First fetch ratings
+      // Fetch ratings
       const { data: ratingsData, error: ratingsError } = await supabase
         .from('ratings')
         .select('*')
@@ -76,7 +79,7 @@ const RatingComponent: React.FC<RatingProps> = ({
       }
 
       if (ratingsData && ratingsData.length > 0) {
-        // Fetch user details separately for each rating
+        // Fetch user details
         const userIds = [...new Set(ratingsData.map(r => r.user_id))];
         const { data: usersData, error: usersError } = await supabase
           .from('users')
@@ -87,7 +90,6 @@ const RatingComponent: React.FC<RatingProps> = ({
           console.error('Error fetching users:', usersError);
         }
 
-        // Combine the data
         const userMap = new Map();
         usersData?.forEach(user => {
           userMap.set(user.id, user);
@@ -126,6 +128,22 @@ const RatingComponent: React.FC<RatingProps> = ({
     }
   };
 
+  const refreshAllData = async () => {
+    setRefreshing(true);
+    try {
+      await fetchRatings();
+      if (onRefreshProduct) {
+        await onRefreshProduct();
+      }
+      toast.success('Ratings refreshed!');
+    } catch (error) {
+      console.error('Error refreshing data:', error);
+      toast.error('Failed to refresh ratings');
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   const handleSubmit = async () => {
     if (!user) {
       toast.error('Please login to rate this product');
@@ -140,6 +158,10 @@ const RatingComponent: React.FC<RatingProps> = ({
     setIsSubmitting(true);
     
     try {
+      console.log('Submitting rating for product:', productId);
+      console.log('User ID:', user.id);
+      console.log('Rating:', rating);
+      
       // Check if user already rated
       const { data: existingRating, error: fetchError } = await supabase
         .from('ratings')
@@ -167,7 +189,7 @@ const RatingComponent: React.FC<RatingProps> = ({
         error = updateError;
         
         if (!error) {
-          toast.success('Review updated successfully!');
+          toast.success('Review updated successfully! 🌿');
         }
       } else {
         // Insert new rating
@@ -179,12 +201,14 @@ const RatingComponent: React.FC<RatingProps> = ({
             rating,
             title,
             comment,
-            verified_purchase: false
+            verified_purchase: false,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
           });
         error = insertError;
         
         if (!error) {
-          toast.success('Review submitted successfully!');
+          toast.success('Review submitted successfully! 🌿');
         }
       }
       
@@ -193,8 +217,11 @@ const RatingComponent: React.FC<RatingProps> = ({
         throw error;
       }
       
-      // Refresh ratings
+      // Refresh all data
       await fetchRatings();
+      if (onRefreshProduct) {
+        await onRefreshProduct();
+      }
       onRatingSubmit();
       
       // Reset form
@@ -225,48 +252,86 @@ const RatingComponent: React.FC<RatingProps> = ({
 
   return (
     <div>
-      {/* Rating Summary */}
-      <div className="bg-gray-50 rounded-xl p-6 mb-8">
+      {/* Rating Summary with Refresh Button */}
+      <div className="bg-gray-50 rounded-xl p-6 mb-8 relative">
+        <button
+          onClick={refreshAllData}
+          disabled={refreshing}
+          className="absolute top-4 right-4 p-2 text-gray-400 hover:text-green-600 transition-colors"
+          title="Refresh ratings"
+        >
+          <RefreshCw className={`h-5 w-5 ${refreshing ? 'animate-spin' : ''}`} />
+        </button>
+        
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           <div className="text-center md:text-left">
-            <div className="text-5xl font-bold text-gray-900 mb-2">
-              {ratingStats.average.toFixed(1)}
-            </div>
-            <div className="flex items-center justify-center md:justify-start mb-2">
-              {[...Array(5)].map((_, i) => (
-                <Star
-                  key={i}
-                  className={`w-5 h-5 ${
-                    i < Math.floor(ratingStats.average)
-                      ? 'fill-yellow-400 text-yellow-400'
-                      : 'text-gray-300'
-                  }`}
-                />
-              ))}
-            </div>
-            <div className="text-gray-600">
-              {ratingStats.total} global ratings
-            </div>
+            {ratingStats.total > 0 ? (
+              <>
+                <div className="text-5xl font-bold text-gray-900 mb-2">
+                  {ratingStats.average.toFixed(1)}
+                </div>
+                <div className="flex items-center justify-center md:justify-start mb-2">
+                  {[...Array(5)].map((_, i) => (
+                    <Star
+                      key={i}
+                      className={`w-5 h-5 ${
+                        i < Math.floor(ratingStats.average)
+                          ? 'fill-yellow-400 text-yellow-400'
+                          : i < ratingStats.average
+                          ? 'fill-yellow-400 text-yellow-400 opacity-50'
+                          : 'text-gray-300'
+                      }`}
+                    />
+                  ))}
+                  <span className="ml-2 text-sm text-gray-500">
+                    ({ratingStats.average.toFixed(1)})
+                  </span>
+                </div>
+                <div className="text-gray-600">
+                  {ratingStats.total} {ratingStats.total === 1 ? 'rating' : 'ratings'}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-5xl font-bold text-gray-400 mb-2">
+                  0.0
+                </div>
+                <div className="flex items-center justify-center md:justify-start mb-2">
+                  {[...Array(5)].map((_, i) => (
+                    <Star key={i} className="w-5 h-5 text-gray-300" />
+                  ))}
+                </div>
+                <div className="text-gray-500">
+                  No ratings yet
+                </div>
+                <p className="text-sm text-gray-500 mt-2">
+                  Be the first to review this product!
+                </p>
+              </>
+            )}
           </div>
           
-          <div>
-            {[5, 4, 3, 2, 1].map(star => (
-              <div key={star} className="flex items-center gap-2 mb-2">
-                <span className="text-sm text-gray-600 w-6">{star}★</span>
-                <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-yellow-400 rounded-full transition-all duration-300"
-                    style={{
-                      width: `${ratingStats.total > 0 ? (ratingStats.distribution[star as keyof typeof ratingStats.distribution] / ratingStats.total) * 100 : 0}%`
-                    }}
-                  />
+          {/* Rating distribution - only show if there are ratings */}
+          {ratingStats.total > 0 && (
+            <div>
+              {[5, 4, 3, 2, 1].map(star => (
+                <div key={star} className="flex items-center gap-2 mb-2">
+                  <span className="text-sm text-gray-600 w-6">{star}★</span>
+                  <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-yellow-400 rounded-full transition-all duration-300"
+                      style={{
+                        width: `${(ratingStats.distribution[star as keyof typeof ratingStats.distribution] / ratingStats.total) * 100}%`
+                      }}
+                    />
+                  </div>
+                  <span className="text-sm text-gray-500 w-12">
+                    {ratingStats.distribution[star as keyof typeof ratingStats.distribution]}
+                  </span>
                 </div>
-                <span className="text-sm text-gray-500 w-12">
-                  {ratingStats.distribution[star as keyof typeof ratingStats.distribution]}
-                </span>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -324,7 +389,14 @@ const RatingComponent: React.FC<RatingProps> = ({
               disabled={isSubmitting || rating === 0}
               className="bg-gradient-to-r from-green-500 to-blue-600 text-white px-6 py-2 rounded-full font-semibold hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isSubmitting ? 'Submitting...' : userRating ? 'Update Review' : 'Submit Review'}
+              {isSubmitting ? (
+                <>
+                  <Loader className="inline w-4 h-4 mr-2 animate-spin" />
+                  Submitting...
+                </>
+              ) : (
+                userRating ? 'Update Review' : 'Submit Review'
+              )}
             </button>
           </div>
         </div>
@@ -341,11 +413,11 @@ const RatingComponent: React.FC<RatingProps> = ({
             >
               {showAllReviews ? (
                 <>
-                  Show less <ChevronUp className="w-4 h-4" />
+                  Show less <ChevronUp className="h-4 w-4" />
                 </>
               ) : (
                 <>
-                  See all {allRatings.length} reviews <ChevronDown className="w-4 h-4" />
+                  See all {allRatings.length} reviews <ChevronDown className="h-4 w-4" />
                 </>
               )}
             </button>
@@ -425,7 +497,7 @@ const RatingComponent: React.FC<RatingProps> = ({
                   className="text-green-600 hover:text-green-700 font-medium inline-flex items-center gap-1"
                 >
                   See all {allRatings.length} reviews
-                  <ChevronDown className="w-4 h-4" />
+                  <ChevronDown className="h-4 w-4" />
                 </button>
               </div>
             )}

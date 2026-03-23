@@ -20,6 +20,7 @@ import PrivacyPolicyPage from './pages/PrivacyPolicyPage';
 import { CartProvider } from './context/CartContext';
 import ProductDetailPage from './pages/ProductDetailPage';
 import AboutPage from './pages/AboutPage';
+import ProductsPage from './pages/ProductsPage';
 
 function App() {
   useEffect(() => {
@@ -62,6 +63,7 @@ function App() {
                       <Route path="/dashboard" element={<DashboardPage />} />
                       <Route path="/product/:id" element={<ProductDetailPage />} />
                       <Route path="/about" element={<AboutPage />} />
+                      <Route path="/products" element={<ProductsPage />} />
                     </Routes>
                   </main>
 

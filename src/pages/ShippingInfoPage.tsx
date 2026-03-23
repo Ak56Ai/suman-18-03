@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   Package,
@@ -14,8 +14,6 @@ import {
   Leaf,
   Heart,
   Droplets,
-  Sun,
-  Wind,
   Flower2,
   Shield,
   Sparkles,
@@ -23,6 +21,7 @@ import {
   Compass
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { getCurrentUser } from '../lib/auth';
 import toast from 'react-hot-toast';
 import Header from '../components/Header';
 import Footer from '../components/Footer';
@@ -38,6 +37,7 @@ interface DeliveryStatus {
 
 interface OrderInfo {
   id: string;
+  order_number: string;
   total_amount: number;
   status: string;
   created_at: string;
@@ -47,24 +47,131 @@ interface OrderInfo {
   courier_partner?: string;
 }
 
+interface PendingOrder {
+  id: string;
+  order_number: string;
+  total_amount: number;
+  created_at: string;
+  days_ago: number;
+  status: string;
+  last_delivery_status?: string;
+  last_delivery_status_name?: string;
+}
+
 const ShippingInfoPage: React.FC = () => {
   const [orderNumber, setOrderNumber] = useState('');
   const [loading, setLoading] = useState(false);
   const [orderInfo, setOrderInfo] = useState<OrderInfo | null>(null);
-  const [deliveryStatuses, setDeliveryStatuses] = useState<DeliveryStatus[]>(
-    []
-  );
+  const [deliveryStatuses, setDeliveryStatuses] = useState<DeliveryStatus[]>([]);
+  const [pendingOrders, setPendingOrders] = useState<PendingOrder[]>([]);
+  const [loadingOrders, setLoadingOrders] = useState(false);
+  const [user, setUser] = useState<any>(null);
 
-  const formatOrderId = (orderId: string) => {
-    const shortId = orderId.split('-').pop() || orderId;
-    return `NATURZEN-${shortId}`;
+  useEffect(() => {
+    checkUser();
+  }, []);
+
+  const checkUser = async () => {
+    try {
+      const { user: currentUser } = await getCurrentUser();
+      if (currentUser) {
+        setUser(currentUser);
+        fetchPendingOrders(currentUser.id);
+      }
+    } catch (error) {
+      console.error('Error checking user:', error);
+    }
   };
 
-  const parseOrderId = (displayId: string) => {
-    if (displayId.startsWith('NATURZEN-')) {
-      return displayId.replace('NATURZEN-', '');
+  const fetchPendingOrders = async (userId: string) => {
+    setLoadingOrders(true);
+    try {
+      // Fetch all orders for the user
+      const { data: orders, error: ordersError } = await supabase
+        .from('orders')
+        .select('id, order_number, total_amount, status, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+
+      if (ordersError) throw ordersError;
+
+      if (!orders || orders.length === 0) {
+        setPendingOrders([]);
+        setLoadingOrders(false);
+        return;
+      }
+
+      // Fetch delivery status for each order
+      const ordersWithStatus = await Promise.all(
+        orders.map(async (order) => {
+          // Use maybeSingle() instead of single() to avoid errors when no tracking exists
+          const { data: deliveryData, error: deliveryError } = await supabase
+            .from('delivery_tracking')
+            .select('status, status_name')
+            .eq('order_id', order.id)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          const orderDate = new Date(order.created_at);
+          const currentDate = new Date();
+          const daysDifference = Math.floor(
+            (currentDate.getTime() - orderDate.getTime()) / (1000 * 3600 * 24)
+          );
+
+          // Only show orders that are NOT delivered
+          const isDelivered = deliveryData?.status_name === 'Delivered';
+          
+          if (!isDelivered) {
+            return {
+              id: order.id,
+              order_number: order.order_number || formatOrderId(order),
+              total_amount: order.total_amount,
+              created_at: order.created_at,
+              days_ago: daysDifference,
+              status: order.status,
+              last_delivery_status: deliveryData?.status,
+              last_delivery_status_name: deliveryData?.status_name || 'Processing'
+            };
+          }
+          return null;
+        })
+      );
+
+      const filteredOrders = ordersWithStatus.filter(order => order !== null);
+      setPendingOrders(filteredOrders as PendingOrder[]);
+      
+    } catch (error) {
+      console.error('Error fetching pending orders:', error);
+    } finally {
+      setLoadingOrders(false);
     }
-    return displayId;
+  };
+
+  const formatOrderId = (order: OrderInfo | any) => {
+    if (order.order_number) {
+      return order.order_number;
+    }
+    
+    if (order.created_at) {
+      const date = new Date(order.created_at);
+      const yy = date.getFullYear().toString().slice(-2);
+      const mm = (date.getMonth() + 1).toString().padStart(2, '0');
+      const dd = date.getDate().toString().padStart(2, '0');
+      const shortId = order.id.split('-').pop()?.slice(0, 5) || '00001';
+      return `RKIN-${yy}${mm}${dd}-${shortId}`;
+    }
+    
+    const shortId = order.id.split('-').pop() || order.id;
+    return `RKIN-${shortId.slice(0, 5)}`;
+  };
+
+  const handleOrderClick = (orderNumber: string) => {
+    setOrderNumber(orderNumber);
+    setTimeout(() => {
+      const fakeEvent = { preventDefault: () => {} } as React.FormEvent;
+      handleSearch(fakeEvent);
+    }, 100);
   };
 
   const handleSearch = async (e: React.FormEvent) => {
@@ -76,15 +183,27 @@ const ShippingInfoPage: React.FC = () => {
 
     setLoading(true);
     try {
-      const searchId = parseOrderId(orderNumber.trim());
-
-      const { data: orders, error: orderError } = await supabase
+      let query = supabase
         .from('orders')
-        .select('*')
-        .ilike('id', `%${searchId}%`)
-        .limit(1);
+        .select('*');
 
-      if (orderError) throw orderError;
+      const searchTerm = orderNumber.trim();
+      
+      // Search by order_number if it starts with RKIN
+      if (searchTerm.startsWith('RKIN-')) {
+        query = query.eq('order_number', searchTerm);
+      } 
+      // Otherwise search by partial ID (convert UUID to text)
+      else {
+        query = query.or(`id::text.ilike.%${searchTerm}%,order_number.ilike.%${searchTerm}%`);
+      }
+
+      const { data: orders, error: orderError } = await query.limit(1);
+
+      if (orderError) {
+        console.error('Order fetch error:', orderError);
+        throw orderError;
+      }
 
       if (!orders || orders.length === 0) {
         toast.error('Order not found. Please check your order number.');
@@ -94,8 +213,10 @@ const ShippingInfoPage: React.FC = () => {
       }
 
       const order = orders[0];
+      console.log('Order found:', order);
       setOrderInfo(order);
 
+      // Fetch delivery tracking
       const { data: tracking, error: trackingError } = await supabase
         .from('delivery_tracking')
         .select('*')
@@ -105,7 +226,14 @@ const ShippingInfoPage: React.FC = () => {
       if (trackingError) throw trackingError;
 
       setDeliveryStatuses(tracking || []);
-      toast.success('Order found! Your wellness package is on its way! 🌿');
+      
+      if (tracking && tracking.length > 0) {
+        const lastStatus = tracking[tracking.length - 1];
+        toast.success(`Order found! Status: ${lastStatus.status_name}`);
+      } else {
+        toast.success('Order found! Tracking information will appear soon.');
+      }
+      
     } catch (error) {
       console.error('Error fetching order:', error);
       toast.error('Unable to track order. Please try again.');
@@ -168,6 +296,21 @@ const ShippingInfoPage: React.FC = () => {
     });
   };
 
+  const getStatusBadgeColor = (statusName?: string) => {
+    switch (statusName) {
+      case 'Delivered':
+        return 'bg-green-100 text-green-800';
+      case 'Out for Delivery':
+        return 'bg-purple-100 text-purple-800';
+      case 'Shipped':
+        return 'bg-blue-100 text-blue-800';
+      case 'Processing':
+        return 'bg-yellow-100 text-yellow-800';
+      default:
+        return 'bg-gray-100 text-gray-800';
+    }
+  };
+
   const shippingInfo = [
     {
       title: 'Conscious Processing',
@@ -206,7 +349,7 @@ const ShippingInfoPage: React.FC = () => {
     <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-emerald-50 flex flex-col">
       <Header />
 
-      {/* Breadcrumb with Nature Touch */}
+      {/* Breadcrumb */}
       <div className="bg-white/80 backdrop-blur-sm border-b border-green-100">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center space-x-2 text-sm text-gray-600">
@@ -245,14 +388,80 @@ const ShippingInfoPage: React.FC = () => {
             </p>
           </motion.div>
 
+          {/* Pending Orders Section */}
+          {user && pendingOrders.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.1 }}
+              className="bg-white rounded-2xl shadow-lg p-6 mb-8 relative overflow-hidden"
+            >
+              <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-green-50 to-transparent rounded-bl-full" />
+              <div className="relative z-10">
+                <div className="flex items-center mb-4">
+                  <div className="p-2 bg-gradient-to-r from-green-100 to-emerald-100 rounded-lg mr-3">
+                    <Package className="h-5 w-5 text-green-600" />
+                  </div>
+                  <h2 className="text-xl font-bold text-gray-900">Active Orders</h2>
+                  {loadingOrders && (
+                    <div className="ml-4">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-600"></div>
+                    </div>
+                  )}
+                </div>
+
+                <p className="text-sm text-gray-600 mb-4">
+                  Click on any order to track its delivery status
+                </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {pendingOrders.map((order) => (
+                    <motion.div
+                      key={order.id}
+                      whileHover={{ scale: 1.02, y: -2 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => handleOrderClick(order.order_number)}
+                      className="border border-gray-200 rounded-xl p-4 cursor-pointer hover:border-green-500 hover:shadow-lg transition-all duration-200 bg-gradient-to-br from-white to-green-50/30"
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <p className="text-sm font-mono text-gray-900 font-medium">
+                            {order.order_number}
+                          </p>
+                          <p className="text-sm text-gray-500 flex items-center gap-1 mt-1">
+                            <Clock className="h-3 w-3" />
+                            {order.days_ago} {order.days_ago === 1 ? 'day' : 'days'} ago
+                          </p>
+                        </div>
+                        <span
+                          className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusBadgeColor(order.last_delivery_status_name)}`}
+                        >
+                          {order.last_delivery_status_name || 'Processing'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center mt-2">
+                        <p className="text-sm font-semibold text-gray-900">
+                          ₹{order.total_amount.toLocaleString()}
+                        </p>
+                        <p className="text-xs text-green-600 flex items-center gap-1">
+                          <Compass className="h-3 w-3" />
+                          Track Order
+                        </p>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+          )}
+
           {/* Order Tracking Section */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.1 }}
+            transition={{ duration: 0.5, delay: 0.2 }}
             className="bg-white rounded-2xl shadow-lg p-8 mb-8 relative overflow-hidden"
           >
-            {/* Decorative Elements */}
             <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-bl from-green-50 to-transparent rounded-bl-full" />
             <div className="absolute bottom-0 left-0 w-24 h-24 bg-gradient-to-tr from-emerald-50 to-transparent rounded-tr-full" />
             
@@ -262,12 +471,8 @@ const ShippingInfoPage: React.FC = () => {
                   <Search className="h-6 w-6 text-green-600" />
                 </div>
                 <div>
-                  <h2 className="text-2xl font-bold text-gray-900">
-                    Find Your Order
-                  </h2>
-                  <p className="text-gray-600">
-                    Enter your order number to begin tracking
-                  </p>
+                  <h2 className="text-2xl font-bold text-gray-900">Find Your Order</h2>
+                  <p className="text-gray-600">Enter your order number to begin tracking</p>
                 </div>
               </div>
 
@@ -279,7 +484,7 @@ const ShippingInfoPage: React.FC = () => {
                       type="text"
                       value={orderNumber}
                       onChange={(e) => setOrderNumber(e.target.value)}
-                      placeholder="Enter order number (e.g., NATURZEN-e177e3eaa544)"
+                      placeholder="Enter order number (e.g., RKIN-260321-00001)"
                       className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all duration-300 bg-gray-50 hover:bg-white focus:bg-white"
                       disabled={loading}
                     />
@@ -303,7 +508,7 @@ const ShippingInfoPage: React.FC = () => {
                 </div>
               </form>
 
-              {/* Order Information */}
+              {/* Order Information Display */}
               {orderInfo && (
                 <motion.div
                   initial={{ opacity: 0, height: 0 }}
@@ -315,29 +520,18 @@ const ShippingInfoPage: React.FC = () => {
                   {deliveryStatuses.length > 0 && (
                     <div className="mb-8">
                       <div className="flex justify-between mb-2">
-                        <span className="text-sm font-medium text-gray-700">
-                          Journey Progress
-                        </span>
+                        <span className="text-sm font-medium text-gray-700">Journey Progress</span>
                         <span className="text-sm font-medium text-green-600">
-                          {Math.round(
-                            getStatusProgress(
-                              deliveryStatuses[deliveryStatuses.length - 1].status
-                            )
-                          )}
-                          %
+                          {Math.round(getStatusProgress(deliveryStatuses[deliveryStatuses.length - 1].status))}%
                         </span>
                       </div>
                       <div className="w-full bg-gray-200 rounded-full h-2.5">
                         <motion.div
                           initial={{ width: 0 }}
-                          animate={{
-                            width: `${getStatusProgress(
-                              deliveryStatuses[deliveryStatuses.length - 1].status
-                            )}%`,
-                          }}
+                          animate={{ width: `${getStatusProgress(deliveryStatuses[deliveryStatuses.length - 1].status)}%` }}
                           transition={{ duration: 0.5 }}
                           className="bg-gradient-to-r from-green-600 to-emerald-600 h-2.5 rounded-full"
-                        ></motion.div>
+                        />
                       </div>
                     </div>
                   )}
@@ -352,7 +546,7 @@ const ShippingInfoPage: React.FC = () => {
                         <div className="flex justify-between py-2 border-b border-green-100">
                           <span className="text-gray-600">Order ID:</span>
                           <span className="font-mono text-sm font-medium text-gray-900">
-                            {formatOrderId(orderInfo.id)}
+                            {formatOrderId(orderInfo)}
                           </span>
                         </div>
                         <div className="flex justify-between py-2 border-b border-green-100">
@@ -363,15 +557,11 @@ const ShippingInfoPage: React.FC = () => {
                         </div>
                         <div className="flex justify-between py-2 border-b border-green-100">
                           <span className="text-gray-600">Status:</span>
-                          <span
-                            className={`px-3 py-1 rounded-full text-xs font-medium ${
-                              orderInfo.status === 'COMPLETED'
-                                ? 'bg-green-100 text-green-800'
-                                : orderInfo.status === 'PENDING'
-                                ? 'bg-yellow-100 text-yellow-800'
-                                : 'bg-blue-100 text-blue-800'
-                            }`}
-                          >
+                          <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                            orderInfo.status === 'COMPLETED' ? 'bg-green-100 text-green-800' :
+                            orderInfo.status === 'PENDING' ? 'bg-yellow-100 text-yellow-800' :
+                            'bg-blue-100 text-blue-800'
+                          }`}>
                             {orderInfo.status}
                           </span>
                         </div>
@@ -381,14 +571,6 @@ const ShippingInfoPage: React.FC = () => {
                             {new Date(orderInfo.created_at).toLocaleDateString()}
                           </span>
                         </div>
-                        {orderInfo.tracking_number && (
-                          <div className="flex justify-between py-2">
-                            <span className="text-gray-600">Tracking #:</span>
-                            <span className="font-mono text-sm text-blue-600">
-                              {orderInfo.tracking_number}
-                            </span>
-                          </div>
-                        )}
                       </div>
                     </div>
 
@@ -399,22 +581,11 @@ const ShippingInfoPage: React.FC = () => {
                       </h3>
                       {orderInfo.shipping_address && (
                         <div className="space-y-2 text-gray-600">
-                          <p className="font-medium text-gray-900">
-                            {orderInfo.shipping_address.name}
-                          </p>
-                          <p>{orderInfo.shipping_address.address_line_1}</p>
-                          {orderInfo.shipping_address.address_line_2 && (
-                            <p>{orderInfo.shipping_address.address_line_2}</p>
-                          )}
-                          <p>
-                            {orderInfo.shipping_address.area},{' '}
-                            {orderInfo.shipping_address.city}
-                          </p>
-                          <p>
-                            {orderInfo.shipping_address.state_province} -{' '}
-                            {orderInfo.shipping_address.postal_code}
-                          </p>
-                          <p>{orderInfo.shipping_address.country}</p>
+                          <p className="font-medium text-gray-900">{orderInfo.shipping_address.fullName || orderInfo.shipping_address.name}</p>
+                          <p>{orderInfo.shipping_address.address_line_1 || orderInfo.shipping_address.address}</p>
+                          {orderInfo.shipping_address.address_line_2 && <p>{orderInfo.shipping_address.address_line_2}</p>}
+                          <p>{orderInfo.shipping_address.area}, {orderInfo.shipping_address.city}</p>
+                          <p>{orderInfo.shipping_address.state_province || orderInfo.shipping_address.state} - {orderInfo.shipping_address.pincode || orderInfo.shipping_address.postal_code}</p>
                           {orderInfo.shipping_address.phone && (
                             <p className="flex items-center mt-4 pt-4 border-t border-blue-100">
                               <Phone className="h-4 w-4 text-gray-400 mr-2" />
@@ -432,20 +603,14 @@ const ShippingInfoPage: React.FC = () => {
                       <div className="flex items-center">
                         <Calendar className="h-6 w-6 text-green-600 mr-3" />
                         <div>
-                          <p className="text-sm text-gray-600">
-                            Estimated Arrival
-                          </p>
-                          <p className="text-xl font-bold text-gray-900">
-                            {getEstimatedDeliveryDate()}
-                          </p>
+                          <p className="text-sm text-gray-600">Estimated Arrival</p>
+                          <p className="text-xl font-bold text-gray-900">{getEstimatedDeliveryDate()}</p>
                         </div>
                       </div>
                       {orderInfo.courier_partner && (
                         <div className="text-right">
                           <p className="text-sm text-gray-600">Delivery Partner</p>
-                          <p className="font-semibold text-gray-900">
-                            {orderInfo.courier_partner}
-                          </p>
+                          <p className="font-semibold text-gray-900">{orderInfo.courier_partner}</p>
                         </div>
                       )}
                     </div>
@@ -459,60 +624,6 @@ const ShippingInfoPage: React.FC = () => {
                         Journey Timeline
                       </h3>
 
-                      {/* Tracking Steps Visualization */}
-                      <div className="mb-8 overflow-x-auto">
-                        <div className="min-w-[600px]">
-                          <div className="flex justify-between">
-                            {getTrackingSteps().map((step, index) => (
-                              <div
-                                key={step.status}
-                                className="flex flex-col items-center relative flex-1"
-                              >
-                                <div className="relative z-10">
-                                  <div
-                                    className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${
-                                      deliveryStatuses.some(
-                                        (s) => s.status >= step.status
-                                      )
-                                        ? 'bg-gradient-to-r from-green-600 to-emerald-600 text-white shadow-lg'
-                                        : 'bg-gray-200 text-gray-400'
-                                    }`}
-                                  >
-                                    <step.icon className="h-6 w-6" />
-                                  </div>
-                                </div>
-                                <p
-                                  className={`text-xs mt-2 text-center font-medium ${
-                                    deliveryStatuses.some(
-                                      (s) => s.status >= step.status
-                                    )
-                                      ? 'text-green-600'
-                                      : 'text-gray-400'
-                                  }`}
-                                >
-                                  {step.label}
-                                </p>
-                                <p className="text-xs text-gray-400 text-center hidden sm:block">
-                                  {step.description}
-                                </p>
-                                {index < getTrackingSteps().length - 1 && (
-                                  <div
-                                    className={`absolute top-6 left-1/2 w-full h-0.5 ${
-                                      deliveryStatuses.some(
-                                        (s) => s.status > step.status
-                                      )
-                                        ? 'bg-gradient-to-r from-green-600 to-emerald-600'
-                                        : 'bg-gray-200'
-                                    }`}
-                                    style={{ transform: 'translateX(50%)' }}
-                                  />
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-
                       {/* Status Timeline */}
                       <div className="space-y-4">
                         {deliveryStatuses.map((status, index) => (
@@ -524,32 +635,18 @@ const ShippingInfoPage: React.FC = () => {
                             className="flex items-start p-4 bg-white rounded-lg border border-gray-100 hover:shadow-md transition-shadow"
                           >
                             <div className="flex-shrink-0 mr-4">
-                              <div
-                                className={`p-2 rounded-full ${getStatusColor(
-                                  status.status
-                                )}`}
-                              >
+                              <div className={`p-2 rounded-full ${getStatusColor(status.status)}`}>
                                 {getStatusIcon(status.status)}
                               </div>
                             </div>
                             <div className="flex-1">
                               <div className="flex items-center justify-between mb-1">
-                                <h4 className="font-semibold text-gray-900">
-                                  {status.status_name}
-                                </h4>
-                                <span
-                                  className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(
-                                    status.status
-                                  )}`}
-                                >
+                                <h4 className="font-semibold text-gray-900">{status.status_name}</h4>
+                                <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(status.status)}`}>
                                   Step {status.status}/7
                                 </span>
                               </div>
-                              {status.notes && (
-                                <p className="text-gray-600 text-sm mb-2">
-                                  {status.notes}
-                                </p>
-                              )}
+                              {status.notes && <p className="text-gray-600 text-sm mb-2">{status.notes}</p>}
                               <div className="flex items-center text-xs text-gray-400">
                                 <Clock className="h-3 w-3 mr-1" />
                                 {new Date(status.created_at).toLocaleString()}
@@ -579,9 +676,7 @@ const ShippingInfoPage: React.FC = () => {
                       <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
                         <Clock className="h-10 w-10 text-amber-600" />
                       </div>
-                      <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                        Preparing Your Wellness Package
-                      </h3>
+                      <h3 className="text-lg font-semibold text-gray-900 mb-2">Preparing Your Wellness Package</h3>
                       <p className="text-gray-600 max-w-md mx-auto">
                         Our team is carefully preparing your natural products. 
                         Tracking information will appear here once your order ships.
@@ -600,135 +695,30 @@ const ShippingInfoPage: React.FC = () => {
                 key={index}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.1 + 0.2 }}
+                transition={{ delay: index * 0.1 + 0.3 }}
                 className="bg-white rounded-xl shadow-lg p-6 hover:shadow-xl transition-all group"
               >
                 <div className="flex items-center mb-4">
                   <div className={`p-3 bg-${info.color}-100 rounded-lg group-hover:scale-110 transition-transform`}>
                     {info.icon}
                   </div>
-                  <h3 className="text-lg font-semibold text-gray-900 ml-3">
-                    {info.title}
-                  </h3>
+                  <h3 className="text-lg font-semibold text-gray-900 ml-3">{info.title}</h3>
                 </div>
-                <p className="text-gray-600 text-sm leading-relaxed">
-                  {info.description}
-                </p>
+                <p className="text-gray-600 text-sm leading-relaxed">{info.description}</p>
               </motion.div>
             ))}
           </div>
-
-          {/* Additional Information */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.3 }}
-            className="bg-white rounded-2xl shadow-lg p-8"
-          >
-            <div className="flex items-center gap-3 mb-6">
-              <div className="p-3 bg-gradient-to-r from-green-100 to-emerald-100 rounded-full">
-                <Leaf className="h-6 w-6 text-green-600" />
-              </div>
-              <h2 className="text-2xl font-bold text-gray-900">
-                Our Shipping Promise
-              </h2>
-            </div>
-
-            <div className="space-y-8">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-                    <Heart className="h-5 w-5 text-rose-600 mr-2" />
-                    Conscious Processing
-                  </h3>
-                  <p className="text-gray-600 leading-relaxed">
-                    Each order is handled with care and intention. Our team ensures every 
-                    product is packed with love, using eco-friendly materials that honor 
-                    Mother Earth.
-                  </p>
-                </div>
-
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-                    <Truck className="h-5 w-5 text-green-600 mr-2" />
-                    Sustainable Delivery
-                  </h3>
-                  <p className="text-gray-600 leading-relaxed">
-                    We partner with eco-conscious logistics providers who share our 
-                    commitment to reducing carbon footprint and protecting the environment.
-                  </p>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">
-                  Delivery Timeframes
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg p-4">
-                    <div className="flex items-center mb-2">
-                      <div className="w-2 h-2 bg-green-600 rounded-full mr-2"></div>
-                      <span className="font-medium text-gray-900">
-                        Standard Delivery
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-600">3-5 business days</p>
-                    <p className="text-xs text-green-600 mt-1">Free over ₹999</p>
-                  </div>
-                  <div className="bg-gradient-to-r from-blue-50 to-cyan-50 rounded-lg p-4">
-                    <div className="flex items-center mb-2">
-                      <div className="w-2 h-2 bg-blue-600 rounded-full mr-2"></div>
-                      <span className="font-medium text-gray-900">
-                        Express Delivery
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-600">1-2 business days</p>
-                    <p className="text-xs text-blue-600 mt-1">Priority handling</p>
-                  </div>
-                  <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg p-4">
-                    <div className="flex items-center mb-2">
-                      <div className="w-2 h-2 bg-purple-600 rounded-full mr-2"></div>
-                      <span className="font-medium text-gray-900">
-                        Same Day Delivery
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-600">Available in select cities</p>
-                    <p className="text-xs text-purple-600 mt-1">Order before 12 PM</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-gradient-to-r from-amber-50 to-yellow-50 rounded-lg p-6">
-                <div className="flex items-start">
-                  <Droplets className="h-5 w-5 text-amber-600 mt-0.5 mr-3 flex-shrink-0" />
-                  <div>
-                    <h4 className="font-semibold text-amber-800 mb-1">
-                      Patience is a Virtue
-                    </h4>
-                    <p className="text-sm text-amber-700">
-                      Sometimes deliveries may take longer due to natural circumstances like weather, 
-                      festivals, or high demand. We'll keep you updated every step of the way with 
-                      email and SMS notifications.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </motion.div>
 
           {/* Need Help */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            transition={{ duration: 0.5, delay: 0.4 }}
+            transition={{ duration: 0.5, delay: 0.5 }}
             className="text-center mt-8"
           >
             <p className="text-gray-500 text-sm">
               Need assistance with your order? Our wellness support team is here for you.
-              <a
-                href="/contact"
-                className="text-green-600 hover:text-green-700 font-medium hover:underline ml-1 inline-flex items-center"
-              >
+              <a href="/contact" className="text-green-600 hover:text-green-700 font-medium hover:underline ml-1 inline-flex items-center">
                 Contact Us
                 <ChevronRight className="h-3 w-3 ml-1" />
               </a>
