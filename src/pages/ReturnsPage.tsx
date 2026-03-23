@@ -494,9 +494,6 @@ const ReturnsPage: React.FC = () => {
               <span className="text-green-700 text-sm font-medium">Easy Returns & Cancellations</span>
             </div>
             <div className="flex items-center justify-center mb-4">
-              <div className="p-4 bg-gradient-to-r from-green-100 to-emerald-100 rounded-full">
-                <Shield className="h-12 w-12 text-green-600" />
-              </div>
             </div>
             <h1 className="text-4xl font-bold text-gray-900 mb-4">
               Returns & Cancellations

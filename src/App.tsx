@@ -75,7 +75,7 @@ function App() {
             <Route path="/shipping-info" element={<ShippingInfoPage />} />
             <Route path="/returns" element={<ReturnsPage />} />
             <Route path="/faq" element={<FAQPage />} />
-            <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
+            <Route path="/privacypolicy" element={<PrivacyPolicyPage />} />
           </Routes>
 
         </div>

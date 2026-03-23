@@ -101,9 +101,45 @@ const ShippingInfoPage: React.FC = () => {
         return;
       }
 
-      // Fetch delivery status for each order
+      // Get order IDs
+      const orderIds = orders.map(order => order.id);
+      
+      // Fetch returns for these orders
+      const { data: returnData, error: returnError } = await supabase
+        .from('order_returns')
+        .select('order_id')
+        .in('order_id', orderIds)
+        .eq('user_id', userId);
+
+      if (returnError) console.error('Error fetching returns:', returnError);
+
+      // Fetch cancellations for these orders
+      const { data: cancellationData, error: cancellationError } = await supabase
+        .from('order_cancellations')
+        .select('order_id')
+        .in('order_id', orderIds)
+        .eq('user_id', userId);
+
+      if (cancellationError) console.error('Error fetching cancellations:', cancellationError);
+
+      // Create sets of order IDs that have returns or cancellations
+      const returnedOrderIds = new Set(returnData?.map(r => r.order_id) || []);
+      const cancelledOrderIds = new Set(cancellationData?.map(c => c.order_id) || []);
+      
+      // Filter out orders that have returns OR cancellations
+      const activeOrders = orders.filter(order => 
+        !returnedOrderIds.has(order.id) && !cancelledOrderIds.has(order.id)
+      );
+
+      if (activeOrders.length === 0) {
+        setPendingOrders([]);
+        setLoadingOrders(false);
+        return;
+      }
+
+      // Fetch delivery status for active orders only
       const ordersWithStatus = await Promise.all(
-        orders.map(async (order) => {
+        activeOrders.map(async (order) => {
           // Use maybeSingle() instead of single() to avoid errors when no tracking exists
           const { data: deliveryData, error: deliveryError } = await supabase
             .from('delivery_tracking')
@@ -213,6 +249,55 @@ const ShippingInfoPage: React.FC = () => {
       }
 
       const order = orders[0];
+      
+      // Check if the order has been returned or cancelled
+      const { data: returnCheck, error: returnCheckError } = await supabase
+        .from('order_returns')
+        .select('id, status')
+        .eq('order_id', order.id)
+        .eq('user_id', user?.id)
+        .maybeSingle();
+
+      if (returnCheckError) console.error('Error checking returns:', returnCheckError);
+
+      const { data: cancellationCheck, error: cancellationCheckError } = await supabase
+        .from('order_cancellations')
+        .select('id, status')
+        .eq('order_id', order.id)
+        .eq('user_id', user?.id)
+        .maybeSingle();
+
+      if (cancellationCheckError) console.error('Error checking cancellations:', cancellationCheckError);
+
+      // If order is returned or cancelled, show appropriate message
+      if (returnCheck) {
+        const returnStatus = returnCheck.status;
+        if (returnStatus === 'approved') {
+          toast.error('This order has been returned and is no longer active.');
+        } else if (returnStatus === 'pending') {
+          toast.info('This order has a pending return request and cannot be tracked.');
+        } else {
+          toast.error('This order has been returned and cannot be tracked.');
+        }
+        setOrderInfo(null);
+        setDeliveryStatuses([]);
+        return;
+      }
+
+      if (cancellationCheck) {
+        const cancelStatus = cancellationCheck.status;
+        if (cancelStatus === 'approved') {
+          toast.error('This order has been cancelled and is no longer active.');
+        } else if (cancelStatus === 'pending') {
+          toast.info('This order has a pending cancellation request and cannot be tracked.');
+        } else {
+          toast.error('This order has been cancelled and cannot be tracked.');
+        }
+        setOrderInfo(null);
+        setDeliveryStatuses([]);
+        return;
+      }
+
       console.log('Order found:', order);
       setOrderInfo(order);
 

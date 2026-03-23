@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Package, Calendar, CreditCard, Truck, Eye, Download, RotateCcw, CheckCircle, Clock } from 'lucide-react';
+import { Package, Calendar, CreditCard, Truck, Eye, Download, RotateCcw, CheckCircle, Clock, RefreshCw, XCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { getCurrentUser } from '../lib/auth';
 import toast from 'react-hot-toast';
@@ -15,6 +15,14 @@ interface Order {
   created_at: string;
   order_items: any[];
   delivery_tracking?: any[];
+  return_status?: {
+    has_return: boolean;
+    return_data?: any;
+  };
+  cancellation_status?: {
+    has_cancellation: boolean;
+    cancellation_data?: any;
+  };
 }
 
 const MyOrdersPage = () => {
@@ -49,6 +57,7 @@ const MyOrdersPage = () => {
 
       const ordersWithItems = await Promise.all(
         ordersData.map(async (order) => {
+          // Fetch order items
           const { data: itemsData, error: itemsError } = await supabase
             .from('order_items')
             .select('*')
@@ -56,6 +65,7 @@ const MyOrdersPage = () => {
 
           if (itemsError) console.error('Error fetching items:', itemsError);
 
+          // Fetch delivery tracking
           const { data: trackingData, error: trackingError } = await supabase
             .from('delivery_tracking')
             .select('*')
@@ -64,10 +74,42 @@ const MyOrdersPage = () => {
 
           if (trackingError) console.error('Error fetching tracking:', trackingError);
 
+          // Check for returns
+          const { data: returnData, error: returnError } = await supabase
+            .from('order_returns')
+            .select('*')
+            .eq('order_id', order.id)
+            .eq('user_id', user.id)
+            .order('created_at', { ascending: false });
+
+          if (returnError) console.error('Error fetching returns:', returnError);
+
+          // Check for cancellations
+          const { data: cancellationData, error: cancellationError } = await supabase
+            .from('order_cancellations')
+            .select('*')
+            .eq('order_id', order.id)
+            .eq('user_id', user.id)
+            .order('created_at', { ascending: false });
+
+          if (cancellationError) console.error('Error fetching cancellations:', cancellationError);
+
+          // Determine return status
+          const hasReturn = returnData && returnData.length > 0;
+          const hasCancellation = cancellationData && cancellationData.length > 0;
+
           return {
             ...order,
             order_items: itemsData || [],
-            delivery_tracking: trackingData || []
+            delivery_tracking: trackingData || [],
+            return_status: {
+              has_return: hasReturn,
+              return_data: hasReturn ? returnData[0] : null
+            },
+            cancellation_status: {
+              has_cancellation: hasCancellation,
+              cancellation_data: hasCancellation ? cancellationData[0] : null
+            }
           };
         })
       );
@@ -81,7 +123,26 @@ const MyOrdersPage = () => {
     }
   };
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = (status: string, order?: Order) => {
+    // Check if order has been cancelled
+    if (order?.cancellation_status?.has_cancellation) {
+      return 'text-red-600 bg-red-100 border-red-200';
+    }
+    
+    // Check if order has been returned
+    if (order?.return_status?.has_return) {
+      const returnStatus = order.return_status.return_data?.status;
+      if (returnStatus === 'approved') {
+        return 'text-orange-600 bg-orange-100 border-orange-200';
+      } else if (returnStatus === 'pending') {
+        return 'text-yellow-600 bg-yellow-100 border-yellow-200';
+      } else if (returnStatus === 'rejected') {
+        return 'text-gray-600 bg-gray-100 border-gray-200';
+      }
+      return 'text-orange-600 bg-orange-100 border-orange-200';
+    }
+
+    // Normal status checks
     switch (status) {
       case 'PAID':
         return 'text-green-600 bg-green-100 border-green-200';
@@ -98,7 +159,34 @@ const MyOrdersPage = () => {
     }
   };
 
-  const getStatusText = (status: string) => {
+  const getStatusText = (status: string, order?: Order) => {
+    // Check if order has been cancelled
+    if (order?.cancellation_status?.has_cancellation) {
+      const cancelStatus = order.cancellation_status.cancellation_data?.status;
+      if (cancelStatus === 'approved') {
+        return 'Cancelled';
+      } else if (cancelStatus === 'pending') {
+        return 'Cancellation Requested';
+      } else if (cancelStatus === 'rejected') {
+        return 'Cancellation Rejected';
+      }
+      return 'Cancelled';
+    }
+    
+    // Check if order has been returned
+    if (order?.return_status?.has_return) {
+      const returnStatus = order.return_status.return_data?.status;
+      if (returnStatus === 'approved') {
+        return 'Returned';
+      } else if (returnStatus === 'pending') {
+        return 'Return Requested';
+      } else if (returnStatus === 'rejected') {
+        return 'Return Rejected';
+      }
+      return 'Returned';
+    }
+
+    // Normal status checks
     switch (status) {
       case 'PAID':
         return 'Payment Successful';
@@ -115,7 +203,18 @@ const MyOrdersPage = () => {
     }
   };
 
-  const getStatusIcon = (status: string) => {
+  const getStatusIcon = (status: string, order?: Order) => {
+    // Check if order has been cancelled
+    if (order?.cancellation_status?.has_cancellation) {
+      return <XCircle className="h-4 w-4" />;
+    }
+    
+    // Check if order has been returned
+    if (order?.return_status?.has_return) {
+      return <RefreshCw className="h-4 w-4" />;
+    }
+
+    // Normal status checks
     switch (status) {
       case 'PAID':
         return <CheckCircle className="h-4 w-4" />;
@@ -156,6 +255,30 @@ const MyOrdersPage = () => {
     const maxStatus = 7;
     const currentStatus = Math.max(...deliveryTracking.map(dt => dt.status));
     return (currentStatus / maxStatus) * 100;
+  };
+
+  const getReturnCancellationMessage = (order: Order) => {
+    if (order.cancellation_status?.has_cancellation) {
+      const cancelData = order.cancellation_status.cancellation_data;
+      return {
+        message: `Cancellation Request - ${cancelData?.status === 'approved' ? 'Approved' : cancelData?.status === 'pending' ? 'Pending Approval' : 'Rejected'}`,
+        reason: cancelData?.reason,
+        comment: cancelData?.comment,
+        type: 'cancellation'
+      };
+    }
+    
+    if (order.return_status?.has_return) {
+      const returnData = order.return_status.return_data;
+      return {
+        message: `Return Request - ${returnData?.status === 'approved' ? 'Approved' : returnData?.status === 'pending' ? 'Pending Approval' : 'Rejected'}`,
+        reason: returnData?.reason,
+        comment: returnData?.comment,
+        type: 'return'
+      };
+    }
+    
+    return null;
   };
 
   if (loading) {
@@ -212,129 +335,173 @@ const MyOrdersPage = () => {
         </div>
 
         <div className="space-y-6">
-          {orders.map((order, index) => (
-            <motion.div
-              key={order.id}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5, delay: index * 0.1 }}
-              whileHover={{ y: -5, boxShadow: "0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)" }}
-              className="bg-white rounded-2xl shadow-lg transition-all duration-300 overflow-hidden"
-            >
-              {/* Order Header */}
-              <div className="bg-gradient-to-r from-green-50 to-emerald-50 p-6 border-b border-green-100">
-                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-                  <div className="flex items-center space-x-4">
-                    <div className="bg-gradient-to-r from-green-100 to-emerald-100 p-3 rounded-full">
-                      <Package className="h-6 w-6 text-green-600" />
+          {orders.map((order, index) => {
+            const returnCancelInfo = getReturnCancellationMessage(order);
+            
+            return (
+              <motion.div
+                key={order.id}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: index * 0.1 }}
+                whileHover={{ y: -5, boxShadow: "0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)" }}
+                className="bg-white rounded-2xl shadow-lg transition-all duration-300 overflow-hidden"
+              >
+                {/* Order Header */}
+                <div className="bg-gradient-to-r from-green-50 to-emerald-50 p-6 border-b border-green-100">
+                  <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                    <div className="flex items-center space-x-4">
+                      <div className="bg-gradient-to-r from-green-100 to-emerald-100 p-3 rounded-full">
+                        <Package className="h-6 w-6 text-green-600" />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-gray-900 text-lg">
+                          {formatOrderId(order)}
+                        </h3>
+                        <p className="text-gray-600 text-sm flex items-center mt-1">
+                          <Calendar className="h-4 w-4 mr-1 text-green-500" />
+                          {new Date(order.created_at).toLocaleDateString('en-IN', {
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="font-bold text-gray-900 text-lg">
-                        {formatOrderId(order)}
-                      </h3>
-                      <p className="text-gray-600 text-sm flex items-center mt-1">
-                        <Calendar className="h-4 w-4 mr-1 text-green-500" />
-                        {new Date(order.created_at).toLocaleDateString('en-IN', {
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })}
-                      </p>
+
+                    <div className="flex items-center space-x-4">
+                      <div className={`px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 ${getStatusColor(order.status, order)}`}>
+                        {getStatusIcon(order.status, order)}
+                        {getStatusText(order.status, order)}
+                      </div>
+                      <div className="text-right">
+                        <p className="font-bold text-2xl text-green-600">
+                          ₹{order.total_amount.toFixed(2)}
+                        </p>
+                        <p className="text-gray-600 text-sm flex items-center justify-end gap-1">
+                          <CreditCard className="h-3 w-3" />
+                          {order.payment_method === 'cod' ? 'Cash on Delivery' : 'Online Payment'}
+                        </p>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="flex items-center space-x-4">
-                    <div className={`px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 ${getStatusColor(order.status)}`}>
-                      {getStatusIcon(order.status)}
-                      {getStatusText(order.status)}
-                    </div>
-                    <div className="text-right">
-                      <p className="font-bold text-2xl text-green-600">
-                        ₹{order.total_amount.toFixed(2)}
-                      </p>
-                      <p className="text-gray-600 text-sm flex items-center justify-end gap-1">
-                        <CreditCard className="h-3 w-3" />
-                        {order.payment_method === 'cod' ? 'Cash on Delivery' : 'Online Payment'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Order Items Summary */}
-              <div className="p-6">
-                <div className="bg-gray-50 rounded-xl p-4 mb-4">
-                  <div className="flex items-center justify-between flex-wrap gap-4">
-                    <div className="flex-1">
-                      <p className="text-gray-600 text-sm mb-1">
-                        {order.order_items.length} item{order.order_items.length > 1 ? 's' : ''} in this order
-                      </p>
-                      <div className="flex flex-wrap gap-2">
-                        {order.order_items.slice(0, 3).map((item, idx) => (
-                          <span
-                            key={item.id}
-                            className="inline-flex items-center gap-1 bg-white px-3 py-1 rounded-full text-sm text-gray-700 shadow-sm"
-                          >
-                            <Package className="h-3 w-3 text-green-500" />
-                            {item.product_name}
-                            <span className="text-gray-400">x{item.quantity}</span>
-                          </span>
-                        ))}
-                        {order.order_items.length > 3 && (
-                          <span className="inline-flex items-center px-3 py-1 rounded-full text-sm bg-gray-200 text-gray-600">
-                            +{order.order_items.length - 3} more
-                          </span>
+                  {/* Return/Cancellation Info Banner */}
+                  {returnCancelInfo && (
+                    <div className={`mt-4 p-3 rounded-lg ${
+                      returnCancelInfo.type === 'cancellation' 
+                        ? 'bg-red-50 border border-red-200' 
+                        : 'bg-orange-50 border border-orange-200'
+                    }`}>
+                      <div className="flex items-start gap-3">
+                        {returnCancelInfo.type === 'cancellation' ? (
+                          <XCircle className="h-5 w-5 text-red-500 mt-0.5" />
+                        ) : (
+                          <RefreshCw className="h-5 w-5 text-orange-500 mt-0.5" />
                         )}
+                        <div className="flex-1">
+                          <p className={`font-medium ${
+                            returnCancelInfo.type === 'cancellation' 
+                              ? 'text-red-800' 
+                              : 'text-orange-800'
+                          }`}>
+                            {returnCancelInfo.message}
+                          </p>
+                          {returnCancelInfo.reason && (
+                            <p className="text-sm text-gray-600 mt-1">
+                              <span className="font-medium">Reason:</span> {returnCancelInfo.reason}
+                            </p>
+                          )}
+                          {returnCancelInfo.comment && (
+                            <p className="text-sm text-gray-600 mt-1">
+                              <span className="font-medium">Comment:</span> {returnCancelInfo.comment}
+                            </p>
+                          )}
+                        </div>
                       </div>
                     </div>
-                    
-                    {/* Delivery Progress */}
-                    <div className="min-w-[200px]">
-                      <div className="text-sm text-gray-600 mb-1">Delivery Progress</div>
-                      <div className="flex items-center gap-2">
-                        <Truck className="h-4 w-4 text-green-600" />
-                        <div className="flex-1 bg-gray-200 rounded-full h-2">
-                          <div
-                            className="bg-gradient-to-r from-green-600 to-emerald-600 h-2 rounded-full transition-all duration-500"
-                            style={{ width: `${getDeliveryProgress(order.delivery_tracking || [])}%` }}
-                          />
+                  )}
+                </div>
+
+                {/* Order Items Summary */}
+                <div className="p-6">
+                  <div className="bg-gray-50 rounded-xl p-4 mb-4">
+                    <div className="flex items-center justify-between flex-wrap gap-4">
+                      <div className="flex-1">
+                        <p className="text-gray-600 text-sm mb-1">
+                          {order.order_items.length} item{order.order_items.length > 1 ? 's' : ''} in this order
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {order.order_items.slice(0, 3).map((item, idx) => (
+                            <span
+                              key={item.id}
+                              className="inline-flex items-center gap-1 bg-white px-3 py-1 rounded-full text-sm text-gray-700 shadow-sm"
+                            >
+                              <Package className="h-3 w-3 text-green-500" />
+                              {item.product_name}
+                              <span className="text-gray-400">x{item.quantity}</span>
+                            </span>
+                          ))}
+                          {order.order_items.length > 3 && (
+                            <span className="inline-flex items-center px-3 py-1 rounded-full text-sm bg-gray-200 text-gray-600">
+                              +{order.order_items.length - 3} more
+                            </span>
+                          )}
                         </div>
-                        <span className="text-sm font-medium text-green-600">
-                          {getCurrentDeliveryStatus(order.delivery_tracking || [])}/7
-                        </span>
                       </div>
+                      
+                      {/* Delivery Progress - Only show if not cancelled/returned */}
+                      {!order.cancellation_status?.has_cancellation && !order.return_status?.has_return && (
+                        <div className="min-w-[200px]">
+                          <div className="text-sm text-gray-600 mb-1">Delivery Progress</div>
+                          <div className="flex items-center gap-2">
+                            <Truck className="h-4 w-4 text-green-600" />
+                            <div className="flex-1 bg-gray-200 rounded-full h-2">
+                              <div
+                                className="bg-gradient-to-r from-green-600 to-emerald-600 h-2 rounded-full transition-all duration-500"
+                                style={{ width: `${getDeliveryProgress(order.delivery_tracking || [])}%` }}
+                              />
+                            </div>
+                            <span className="text-sm font-medium text-green-600">
+                              {getCurrentDeliveryStatus(order.delivery_tracking || [])}/7
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
-                </div>
 
-                {/* Action Buttons */}
-                <div className="flex flex-col sm:flex-row gap-3">
-                  <Link
-                    to={`/order-success/${order.id}`}
-                    className="flex items-center justify-center bg-gradient-to-r from-green-600 to-emerald-600 text-white px-4 py-2.5 rounded-lg font-medium hover:from-green-700 hover:to-emerald-700 transition-all duration-300 shadow-md hover:shadow-lg"
-                  >
-                    <Eye className="h-4 w-4 mr-2" />
-                    View Details
-                  </Link>
-                  
-                  <button className="flex items-center justify-center border-2 border-green-600 text-green-600 px-4 py-2.5 rounded-lg font-medium hover:bg-green-600 hover:text-white transition-all duration-300">
-                    <Download className="h-4 w-4 mr-2" />
-                    Download Invoice
-                  </button>
+                  {/* Action Buttons */}
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <Link
+                      to={`/order-success/${order.id}`}
+                      className="flex items-center justify-center bg-gradient-to-r from-green-600 to-emerald-600 text-white px-4 py-2.5 rounded-lg font-medium hover:from-green-700 hover:to-emerald-700 transition-all duration-300 shadow-md hover:shadow-lg"
+                    >
+                      <Eye className="h-4 w-4 mr-2" />
+                      View Details
+                    </Link>
+                    
+                    <button className="flex items-center justify-center border-2 border-green-600 text-green-600 px-4 py-2.5 rounded-lg font-medium hover:bg-green-600 hover:text-white transition-all duration-300">
+                      <Download className="h-4 w-4 mr-2" />
+                      Download Invoice
+                    </button>
 
-                  <Link
-                    to={`/track-order/${order.id}`}
-                    className="flex items-center justify-center border border-gray-300 text-gray-700 px-4 py-2.5 rounded-lg font-medium hover:bg-gray-50 transition-all duration-300"
-                  >
-                    <Truck className="h-4 w-4 mr-2" />
-                    Track Order
-                  </Link>
+                    {!order.cancellation_status?.has_cancellation && !order.return_status?.has_return && (
+                      <Link
+                        to={`/track-order/${order.id}`}
+                        className="flex items-center justify-center border border-gray-300 text-gray-700 px-4 py-2.5 rounded-lg font-medium hover:bg-gray-50 transition-all duration-300"
+                      >
+                        <Truck className="h-4 w-4 mr-2" />
+                        Track Order
+                      </Link>
+                    )}
+                  </div>
                 </div>
-              </div>
-            </motion.div>
-          ))}
+              </motion.div>
+            );
+          })}
         </div>
       </div>
     </div>
