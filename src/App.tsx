@@ -21,6 +21,7 @@ import { CartProvider } from './context/CartContext';
 import ProductDetailPage from './pages/ProductDetailPage';
 import AboutPage from './pages/AboutPage';
 import ProductsPage from './pages/ProductsPage';
+import NotFoundPage from './pages/NotFoundPage';
 
 function App() {
   useEffect(() => {
@@ -39,45 +40,130 @@ function App() {
                 background: '#10B981',
                 color: '#fff',
               },
+              success: {
+                style: {
+                  background: '#10B981',
+                },
+              },
+              error: {
+                style: {
+                  background: '#EF4444',
+                },
+              },
             }}
           />
 
           <Routes>
+            {/* Auth Routes - No Header/Footer */}
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-
-            <Route
-              path="/*"
-              element={
-                <>
-                  <Header />
-
-                  <main>
-                    <Routes>
-                      <Route path="/" element={<HomePage />} />
-                      <Route path="/cart" element={<CartPage />} />
-                      <Route path="/checkout" element={<CheckoutPage />} />
-                      <Route path="/order-success/:orderId" element={<OrderSuccessPage />} />
-                      <Route path="/my-orders" element={<MyOrdersPage />} />
-                      <Route path="/dashboard" element={<DashboardPage />} />
-                      <Route path="/product/:id" element={<ProductDetailPage />} />
-                      <Route path="/about" element={<AboutPage />} />
-                      <Route path="/products" element={<ProductsPage />} />
-                    </Routes>
-                  </main>
-
-                  <Footer />
-                </>
-              }
-            />
-            <Route path="/contact" element={<ContactPage />} />
-            <Route path="/shipping-info" element={<ShippingInfoPage />} />
-            <Route path="/returns" element={<ReturnsPage />} />
-            <Route path="/faq" element={<FAQPage />} />
-            <Route path="/privacypolicy" element={<PrivacyPolicyPage />} />
+            
+            {/* Contact & Info Routes - With Header/Footer */}
+            <Route path="/contact" element={
+              <>
+                <Header />
+                <ContactPage />
+                <Footer />
+              </>
+            } />
+            <Route path="/shipping-info" element={
+              <>
+                <Header />
+                <ShippingInfoPage />
+                <Footer />
+              </>
+            } />
+            <Route path="/returns" element={
+              <>
+                <Header />
+                <ReturnsPage />
+                <Footer />
+              </>
+            } />
+            <Route path="/faq" element={
+              <>
+                <Header />
+                <FAQPage />
+                <Footer />
+              </>
+            } />
+            <Route path="/privacypolicy" element={
+              <>
+                <Header />
+                <PrivacyPolicyPage />
+                <Footer />
+              </>
+            } />
+            
+            {/* Main Routes - With Header/Footer */}
+            <Route path="/" element={
+              <>
+                <Header />
+                <HomePage />
+                <Footer />
+              </>
+            } />
+            <Route path="/cart" element={
+              <>
+                <Header />
+                <CartPage />
+                <Footer />
+              </>
+            } />
+            <Route path="/checkout" element={
+              <>
+                <Header />
+                <CheckoutPage />
+                <Footer />
+              </>
+            } />
+            <Route path="/order-success/:orderId" element={
+              <>
+                <Header />
+                <OrderSuccessPage />
+                <Footer />
+              </>
+            } />
+            <Route path="/my-orders" element={
+              <>
+                <Header />
+                <MyOrdersPage />
+                <Footer />
+              </>
+            } />
+            <Route path="/dashboard" element={
+              <>
+                <Header />
+                <DashboardPage />
+                <Footer />
+              </>
+            } />
+            <Route path="/product/:id" element={
+              <>
+                <Header />
+                <ProductDetailPage />
+                <Footer />
+              </>
+            } />
+            <Route path="/about" element={
+              <>
+                <Header />
+                <AboutPage />
+                <Footer />
+              </>
+            } />
+            <Route path="/products" element={
+              <>
+                <Header />
+                <ProductsPage />
+                <Footer />
+              </>
+            } />
+            
+            {/* 404 Not Found Route */}
+            <Route path="*" element={<NotFoundPage />} />
           </Routes>
-
         </div>
       </Router>
     </CartProvider>

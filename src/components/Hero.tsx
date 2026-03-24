@@ -113,7 +113,7 @@ const Hero = () => {
                 <img
                   src="https://i.postimg.cc/vZ9k9dDX/honey-sticks-png-7.png"
                   alt="Meditation and Wellness"
-                  className="w-90 h-90 object-cover rounded-2xl shadow-lg"
+                  className="w-80 h-80 object-cover rounded-2xl shadow-lg"
                 />
                 
                 {/* Floating Cards */}
