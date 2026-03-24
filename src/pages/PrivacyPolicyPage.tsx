@@ -35,8 +35,6 @@ import {
   Calendar
 } from 'lucide-react';
 import { motion } from 'framer-motion';
-import Header from '../components/Header';
-import Footer from '../components/Footer';
 
 const PrivacyPolicyPage: React.FC = () => {
   const sections = [
@@ -142,7 +140,6 @@ const PrivacyPolicyPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 flex flex-col">
-      <Header />
 
       {/* Breadcrumb */}
       <div className="bg-white/80 backdrop-blur-sm border-b border-gray-100 sticky top-16 z-40">
@@ -532,7 +529,6 @@ const PrivacyPolicyPage: React.FC = () => {
         </div>
       </main>
 
-      <Footer />
     </div>
   );
 };

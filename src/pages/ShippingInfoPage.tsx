@@ -23,8 +23,6 @@ import {
 import { supabase } from '../lib/supabase';
 import { getCurrentUser } from '../lib/auth';
 import toast from 'react-hot-toast';
-import Header from '../components/Header';
-import Footer from '../components/Footer';
 
 interface DeliveryStatus {
   id: string;
@@ -432,7 +430,6 @@ const ShippingInfoPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-emerald-50 flex flex-col">
-      <Header />
 
       {/* Breadcrumb */}
       <div className="bg-white/80 backdrop-blur-sm border-b border-green-100">
@@ -812,7 +809,6 @@ const ShippingInfoPage: React.FC = () => {
         </div>
       </main>
 
-      <Footer />
     </div>
   );
 };
