@@ -1,7 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Package, Calendar, CreditCard, Truck, Eye, Download, RotateCcw, CheckCircle, Clock, RefreshCw, XCircle } from 'lucide-react';
+import { 
+  Package, Calendar, CreditCard, Truck, Eye, Download, RotateCcw, 
+  CheckCircle, Clock, RefreshCw, XCircle, ArrowRight, 
+  ShoppingBag, Percent, Receipt, MapPin, ChevronRight 
+} from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { getCurrentUser } from '../lib/auth';
 import toast from 'react-hot-toast';
@@ -23,9 +27,11 @@ interface Order {
     has_cancellation: boolean;
     cancellation_data?: any;
   };
+  shipping_address?: any;
 }
 
 const MyOrdersPage = () => {
+  const navigate = useNavigate();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -57,13 +63,52 @@ const MyOrdersPage = () => {
 
       const ordersWithItems = await Promise.all(
         ordersData.map(async (order) => {
-          // Fetch order items
+          // Fetch order items with product details including images
           const { data: itemsData, error: itemsError } = await supabase
             .from('order_items')
-            .select('*')
+            .select(`
+              *,
+              product:products (
+                id,
+                name,
+                image_url,
+                images,
+                price
+              )
+            `)
             .eq('order_id', order.id);
 
           if (itemsError) console.error('Error fetching items:', itemsError);
+
+          // Process items to include product images
+          const processedItems = (itemsData || []).map(item => {
+            let productImage = 'https://via.placeholder.com/80?text=Product';
+            
+            // Get image from product data
+            if (item.product) {
+              if (item.product.image_url) {
+                productImage = item.product.image_url;
+              } else if (item.product.images) {
+                try {
+                  const images = typeof item.product.images === 'string' 
+                    ? JSON.parse(item.product.images) 
+                    : item.product.images;
+                  if (images && images.length > 0) {
+                    productImage = images[0];
+                  }
+                } catch (e) {
+                  console.error('Error parsing images:', e);
+                }
+              }
+            }
+            
+            return {
+              ...item,
+              image_url: productImage,
+              product_name: item.product?.name || item.product_name,
+              product_id: item.product?.id || item.product_id
+            };
+          });
 
           // Fetch delivery tracking
           const { data: trackingData, error: trackingError } = await supabase
@@ -94,13 +139,12 @@ const MyOrdersPage = () => {
 
           if (cancellationError) console.error('Error fetching cancellations:', cancellationError);
 
-          // Determine return status
           const hasReturn = returnData && returnData.length > 0;
           const hasCancellation = cancellationData && cancellationData.length > 0;
 
           return {
             ...order,
-            order_items: itemsData || [],
+            order_items: processedItems || [],
             delivery_tracking: trackingData || [],
             return_status: {
               has_return: hasReturn,
@@ -123,26 +167,32 @@ const MyOrdersPage = () => {
     }
   };
 
+  // Calculate GST (18%)
+  const calculateGST = (amount: number) => {
+    const gstRate = 0.18;
+    return {
+      totalGST: amount * gstRate,
+      cgst: (amount * gstRate) / 2,
+      sgst: (amount * gstRate) / 2,
+      rate: 18
+    };
+  };
+
   const getStatusColor = (status: string, order?: Order) => {
-    // Check if order has been cancelled
     if (order?.cancellation_status?.has_cancellation) {
       return 'text-red-600 bg-red-100 border-red-200';
     }
     
-    // Check if order has been returned
     if (order?.return_status?.has_return) {
       const returnStatus = order.return_status.return_data?.status;
       if (returnStatus === 'approved') {
         return 'text-orange-600 bg-orange-100 border-orange-200';
       } else if (returnStatus === 'pending') {
         return 'text-yellow-600 bg-yellow-100 border-yellow-200';
-      } else if (returnStatus === 'rejected') {
-        return 'text-gray-600 bg-gray-100 border-gray-200';
       }
       return 'text-orange-600 bg-orange-100 border-orange-200';
     }
 
-    // Normal status checks
     switch (status) {
       case 'PAID':
         return 'text-green-600 bg-green-100 border-green-200';
@@ -160,33 +210,20 @@ const MyOrdersPage = () => {
   };
 
   const getStatusText = (status: string, order?: Order) => {
-    // Check if order has been cancelled
     if (order?.cancellation_status?.has_cancellation) {
       const cancelStatus = order.cancellation_status.cancellation_data?.status;
-      if (cancelStatus === 'approved') {
-        return 'Cancelled';
-      } else if (cancelStatus === 'pending') {
-        return 'Cancellation Requested';
-      } else if (cancelStatus === 'rejected') {
-        return 'Cancellation Rejected';
-      }
+      if (cancelStatus === 'approved') return 'Cancelled';
+      if (cancelStatus === 'pending') return 'Cancellation Requested';
       return 'Cancelled';
     }
     
-    // Check if order has been returned
     if (order?.return_status?.has_return) {
       const returnStatus = order.return_status.return_data?.status;
-      if (returnStatus === 'approved') {
-        return 'Returned';
-      } else if (returnStatus === 'pending') {
-        return 'Return Requested';
-      } else if (returnStatus === 'rejected') {
-        return 'Return Rejected';
-      }
+      if (returnStatus === 'approved') return 'Returned';
+      if (returnStatus === 'pending') return 'Return Requested';
       return 'Returned';
     }
 
-    // Normal status checks
     switch (status) {
       case 'PAID':
         return 'Payment Successful';
@@ -204,22 +241,16 @@ const MyOrdersPage = () => {
   };
 
   const getStatusIcon = (status: string, order?: Order) => {
-    // Check if order has been cancelled
     if (order?.cancellation_status?.has_cancellation) {
       return <XCircle className="h-4 w-4" />;
     }
-    
-    // Check if order has been returned
     if (order?.return_status?.has_return) {
       return <RefreshCw className="h-4 w-4" />;
     }
-
-    // Normal status checks
     switch (status) {
       case 'PAID':
         return <CheckCircle className="h-4 w-4" />;
       case 'COD_PENDING':
-        return <Clock className="h-4 w-4" />;
       case 'PENDING':
         return <Clock className="h-4 w-4" />;
       case 'SHIPPED':
@@ -231,23 +262,25 @@ const MyOrdersPage = () => {
     }
   };
 
-  const formatOrderId = (order: Order | any) => {
-    if (order.order_number) {
-      return order.order_number;
-    }
+  const getDispatchStatus = (order: Order) => {
+    if (order.cancellation_status?.has_cancellation) return 'Cancelled';
+    if (order.return_status?.has_return) return 'Returned';
     
+    const tracking = order.delivery_tracking;
+    if (!tracking || tracking.length === 0) return 'Processing';
+    
+    const lastStatus = tracking[tracking.length - 1];
+    return lastStatus.status_name || 'Processing';
+  };
+
+  const formatOrderId = (order: Order | any) => {
+    if (order.order_number) return order.order_number;
     if (order.id) {
       const uuidWithoutHyphens = order.id.replace(/-/g, '');
       const last12Chars = uuidWithoutHyphens.slice(-12);
       return `RKIN-${last12Chars}`;
     }
-    
     return 'RKIN-XXXXXX';
-  };
-
-  const getCurrentDeliveryStatus = (deliveryTracking: any[]) => {
-    if (!deliveryTracking || deliveryTracking.length === 0) return 1;
-    return Math.max(...deliveryTracking.map(dt => dt.status));
   };
 
   const getDeliveryProgress = (deliveryTracking: any[]) => {
@@ -257,28 +290,15 @@ const MyOrdersPage = () => {
     return (currentStatus / maxStatus) * 100;
   };
 
-  const getReturnCancellationMessage = (order: Order) => {
-    if (order.cancellation_status?.has_cancellation) {
-      const cancelData = order.cancellation_status.cancellation_data;
-      return {
-        message: `Cancellation Request - ${cancelData?.status === 'approved' ? 'Approved' : cancelData?.status === 'pending' ? 'Pending Approval' : 'Rejected'}`,
-        reason: cancelData?.reason,
-        comment: cancelData?.comment,
-        type: 'cancellation'
-      };
-    }
-    
-    if (order.return_status?.has_return) {
-      const returnData = order.return_status.return_data;
-      return {
-        message: `Return Request - ${returnData?.status === 'approved' ? 'Approved' : returnData?.status === 'pending' ? 'Pending Approval' : 'Rejected'}`,
-        reason: returnData?.reason,
-        comment: returnData?.comment,
-        type: 'return'
-      };
-    }
-    
-    return null;
+  // Handle product click - navigate to product detail page
+  const handleProductClick = (e: React.MouseEvent, productId: string) => {
+    e.stopPropagation(); // Prevent triggering order click
+    navigate(`/product/${productId}`);
+  };
+
+  // Handle order click - navigate to order success page
+  const handleOrderClick = (orderId: string) => {
+    navigate(`/order-success/${orderId}`);
   };
 
   if (loading) {
@@ -330,13 +350,18 @@ const MyOrdersPage = () => {
                 {orders.length} {orders.length === 1 ? 'order' : 'orders'}
               </span>
             </div>
-            <RotateCcw className="h-5 w-5 text-gray-400 cursor-pointer hover:text-green-600 transition-colors" />
+            <button onClick={() => fetchOrders()} className="hover:rotate-180 transition-transform duration-300">
+              <RotateCcw className="h-5 w-5 text-gray-400 cursor-pointer hover:text-green-600 transition-colors" />
+            </button>
           </div>
         </div>
 
-        <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {orders.map((order, index) => {
-            const returnCancelInfo = getReturnCancellationMessage(order);
+            const subtotal = order.order_items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+            const gstDetails = calculateGST(subtotal);
+            const finalAmount = subtotal + gstDetails.totalGST;
+            const dispatchStatus = getDispatchStatus(order);
             
             return (
               <motion.div
@@ -345,7 +370,8 @@ const MyOrdersPage = () => {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.5, delay: index * 0.1 }}
                 whileHover={{ y: -5, boxShadow: "0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)" }}
-                className="bg-white rounded-2xl shadow-lg transition-all duration-300 overflow-hidden"
+                onClick={() => handleOrderClick(order.id)}
+                className="bg-white rounded-2xl shadow-lg transition-all duration-300 overflow-hidden cursor-pointer group h-full flex flex-col"
               >
                 {/* Order Header */}
                 <div className="bg-gradient-to-r from-green-50 to-emerald-50 p-6 border-b border-green-100">
@@ -363,9 +389,7 @@ const MyOrdersPage = () => {
                           {new Date(order.created_at).toLocaleDateString('en-IN', {
                             year: 'numeric',
                             month: 'long',
-                            day: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit'
+                            day: 'numeric'
                           })}
                         </p>
                       </div>
@@ -378,7 +402,7 @@ const MyOrdersPage = () => {
                       </div>
                       <div className="text-right">
                         <p className="font-bold text-2xl text-green-600">
-                          ₹{order.total_amount.toFixed(2)}
+                          ₹{finalAmount.toFixed(2)}
                         </p>
                         <p className="text-gray-600 text-sm flex items-center justify-end gap-1">
                           <CreditCard className="h-3 w-3" />
@@ -387,85 +411,101 @@ const MyOrdersPage = () => {
                       </div>
                     </div>
                   </div>
-
-                  {/* Return/Cancellation Info Banner */}
-                  {returnCancelInfo && (
-                    <div className={`mt-4 p-3 rounded-lg ${
-                      returnCancelInfo.type === 'cancellation' 
-                        ? 'bg-red-50 border border-red-200' 
-                        : 'bg-orange-50 border border-orange-200'
-                    }`}>
-                      <div className="flex items-start gap-3">
-                        {returnCancelInfo.type === 'cancellation' ? (
-                          <XCircle className="h-5 w-5 text-red-500 mt-0.5" />
-                        ) : (
-                          <RefreshCw className="h-5 w-5 text-orange-500 mt-0.5" />
-                        )}
-                        <div className="flex-1">
-                          <p className={`font-medium ${
-                            returnCancelInfo.type === 'cancellation' 
-                              ? 'text-red-800' 
-                              : 'text-orange-800'
-                          }`}>
-                            {returnCancelInfo.message}
-                          </p>
-                          {returnCancelInfo.reason && (
-                            <p className="text-sm text-gray-600 mt-1">
-                              <span className="font-medium">Reason:</span> {returnCancelInfo.reason}
-                            </p>
-                          )}
-                          {returnCancelInfo.comment && (
-                            <p className="text-sm text-gray-600 mt-1">
-                              <span className="font-medium">Comment:</span> {returnCancelInfo.comment}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
                 </div>
 
-                {/* Order Items Summary */}
-                <div className="p-6">
-                  <div className="bg-gray-50 rounded-xl p-4 mb-4">
-                    <div className="flex items-center justify-between flex-wrap gap-4">
-                      <div className="flex-1">
-                        <p className="text-gray-600 text-sm mb-1">
-                          {order.order_items.length} item{order.order_items.length > 1 ? 's' : ''} in this order
-                        </p>
-                        <div className="flex flex-wrap gap-2">
-                          {order.order_items.slice(0, 3).map((item, idx) => (
-                            <span
-                              key={item.id}
-                              className="inline-flex items-center gap-1 bg-white px-3 py-1 rounded-full text-sm text-gray-700 shadow-sm"
-                            >
-                              <Package className="h-3 w-3 text-green-500" />
-                              {item.product_name}
-                              <span className="text-gray-400">x{item.quantity}</span>
-                            </span>
-                          ))}
-                          {order.order_items.length > 3 && (
-                            <span className="inline-flex items-center px-3 py-1 rounded-full text-sm bg-gray-200 text-gray-600">
-                              +{order.order_items.length - 3} more
-                            </span>
-                          )}
+                {/* Order Items with Images */}
+                <div className="p-6 flex-1">
+                  <div className="space-y-4">
+                    {/* Show up to 2 items */}
+                    {order.order_items.slice(0, 2).map((item, idx) => (
+                      <div 
+                        key={item.id} 
+                        className="flex gap-4 items-center group/item cursor-pointer hover:bg-gray-50 rounded-lg p-2 transition-colors"
+                        onClick={(e) => handleProductClick(e, item.product_id)}
+                      >
+                        <div className="w-20 h-20 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0">
+                          <img
+                            src={item.image_url}
+                            alt={item.product_name}
+                            className="w-full h-full object-cover group-hover/item:scale-110 transition-transform duration-300"
+                            onError={(e) => {
+                              e.currentTarget.src = 'https://via.placeholder.com/80?text=Product';
+                            }}
+                          />
+                        </div>
+                        <div className="flex-1">
+                          <h4 className="font-semibold text-gray-900 hover:text-green-600 transition-colors line-clamp-2">
+                            {item.product_name}
+                          </h4>
+                          <p className="text-sm text-gray-500">Qty: {item.quantity}</p>
+                          <p className="text-sm font-medium text-gray-900">₹{item.price.toFixed(2)}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-semibold text-green-600">₹{(item.price * item.quantity).toFixed(2)}</p>
                         </div>
                       </div>
+                    ))}
+                    
+                    {order.order_items.length > 2 && (
+                      <div className="text-center text-sm text-gray-500">
+                        +{order.order_items.length - 2} more items
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Order Summary with GST */}
+                  <div className="mt-6 pt-4 border-t border-gray-100">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-xs text-gray-500">Subtotal</p>
+                        <p className="text-sm font-semibold text-gray-900">₹{subtotal.toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 flex items-center gap-1">
+                          <Percent className="h-3 w-3" />
+                          GST ({gstDetails.rate}%)
+                        </p>
+                        <p className="text-sm font-semibold text-gray-900">₹{gstDetails.totalGST.toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Shipping</p>
+                        <p className="text-sm font-semibold text-green-600">FREE</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 font-semibold">Total</p>
+                        <p className="text-lg font-bold text-green-600">₹{finalAmount.toFixed(2)}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Dispatch Status & Delivery Progress */}
+                  <div className="mt-4 pt-4 border-t border-gray-100">
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                      <div className="flex items-center gap-2">
+                        <Truck className="h-4 w-4 text-green-600" />
+                        <span className="text-sm text-gray-600">Status:</span>
+                        <span className={`text-sm font-semibold px-2 py-1 rounded-full ${
+                          dispatchStatus === 'Delivered' ? 'bg-green-100 text-green-700' :
+                          dispatchStatus === 'Shipped' ? 'bg-blue-100 text-blue-700' :
+                          dispatchStatus === 'Processing' ? 'bg-yellow-100 text-yellow-700' :
+                          'bg-gray-100 text-gray-700'
+                        }`}>
+                          {dispatchStatus}
+                        </span>
+                      </div>
                       
-                      {/* Delivery Progress - Only show if not cancelled/returned */}
                       {!order.cancellation_status?.has_cancellation && !order.return_status?.has_return && (
-                        <div className="min-w-[200px]">
-                          <div className="text-sm text-gray-600 mb-1">Delivery Progress</div>
+                        <div className="flex-1 max-w-md">
                           <div className="flex items-center gap-2">
-                            <Truck className="h-4 w-4 text-green-600" />
-                            <div className="flex-1 bg-gray-200 rounded-full h-2">
+                            <span className="text-xs text-gray-500">Progress</span>
+                            <div className="flex-1 bg-gray-200 rounded-full h-1.5">
                               <div
-                                className="bg-gradient-to-r from-green-600 to-emerald-600 h-2 rounded-full transition-all duration-500"
+                                className="bg-gradient-to-r from-green-600 to-emerald-600 h-1.5 rounded-full transition-all duration-500"
                                 style={{ width: `${getDeliveryProgress(order.delivery_tracking || [])}%` }}
                               />
                             </div>
-                            <span className="text-sm font-medium text-green-600">
-                              {getCurrentDeliveryStatus(order.delivery_tracking || [])}/7
+                            <span className="text-xs font-medium text-green-600">
+                              {Math.round(getDeliveryProgress(order.delivery_tracking || []))}%
                             </span>
                           </div>
                         </div>
@@ -473,30 +513,14 @@ const MyOrdersPage = () => {
                     </div>
                   </div>
 
-                  {/* Action Buttons */}
-                  <div className="flex flex-col sm:flex-row gap-3">
-                    <Link
-                      to={`/order-success/${order.id}`}
-                      className="flex items-center justify-center bg-gradient-to-r from-green-600 to-emerald-600 text-white px-4 py-2.5 rounded-lg font-medium hover:from-green-700 hover:to-emerald-700 transition-all duration-300 shadow-md hover:shadow-lg"
-                    >
-                      <Eye className="h-4 w-4 mr-2" />
-                      View Details
-                    </Link>
-                    
-                    <button className="flex items-center justify-center border-2 border-green-600 text-green-600 px-4 py-2.5 rounded-lg font-medium hover:bg-green-600 hover:text-white transition-all duration-300">
-                      <Download className="h-4 w-4 mr-2" />
-                      Download Invoice
-                    </button>
-
-                    {!order.cancellation_status?.has_cancellation && !order.return_status?.has_return && (
-                      <Link
-                        to={`/track-order/${order.id}`}
-                        className="flex items-center justify-center border border-gray-300 text-gray-700 px-4 py-2.5 rounded-lg font-medium hover:bg-gray-50 transition-all duration-300"
-                      >
-                        <Truck className="h-4 w-4 mr-2" />
-                        Track Order
-                      </Link>
-                    )}
+                  {/* View Details Button */}
+                  <div className="mt-4 pt-4 border-t border-gray-100">
+                    <div className="flex justify-end">
+                      <div className="flex items-center text-green-600 group-hover:text-green-700 font-medium text-sm">
+                        View Order Details
+                        <ChevronRight className="h-4 w-4 ml-1 group-hover:translate-x-1 transition-transform" />
+                      </div>
+                    </div>
                   </div>
                 </div>
               </motion.div>

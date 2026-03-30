@@ -39,12 +39,25 @@ interface Product {
   shelf_life: string;
   product_story: string;
   specifications: any[];
-  banners: any[]; // Change this to any[] since banners are objects now
+  banners: ProductBanner[];
   rating_average: number;
   rating_count: number;
 }
 
-const ProductDetailPage = () => {
+interface ProductBanner {
+  id: string;
+  product_id: string;
+  banner_url: string;
+  title: string;
+  description: string;
+  button_link?: string;
+  button_text?: string;
+  display_order: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+const ProductDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { addToCart } = useCart();
@@ -57,11 +70,15 @@ const ProductDetailPage = () => {
   const [activeTab, setActiveTab] = useState('description');
   const [showImageModal, setShowImageModal] = useState(false);
   const [userRating, setUserRating] = useState<number | null>(null);
+  const [productBanners, setProductBanners] = useState<ProductBanner[]>([]);
 
   useEffect(() => {
-    fetchProduct();
-    checkWishlist();
-    fetchUserRating();
+    if (id) {
+      fetchProduct();
+      fetchProductBanners();
+      checkWishlist();
+      fetchUserRating();
+    }
   }, [id, user]);
 
   const fetchProduct = async () => {
@@ -75,18 +92,6 @@ const ProductDetailPage = () => {
         .single();
 
       if (productError) throw productError;
-
-      // Fetch banners for this product
-      const { data: bannersData, error: bannersError } = await supabase
-        .from('product_banners')
-        .select('*')
-        .eq('product_id', id)
-        .eq('is_active', true)
-        .order('display_order', { ascending: true });
-
-      if (bannersError) {
-        console.error('Error fetching banners:', bannersError);
-      }
 
       // Parse images if stored as JSON string
       let images = [];
@@ -109,7 +114,7 @@ const ProductDetailPage = () => {
       setProduct({
         ...productData,
         images: images,
-        banners: bannersData || [] // Store full banner objects
+        banners: [] // Will be filled by fetchProductBanners
       });
       
     } catch (error) {
@@ -121,26 +126,80 @@ const ProductDetailPage = () => {
     }
   };
 
+  const fetchProductBanners = async () => {
+    if (!id) {
+      console.log('No product ID available');
+      return;
+    }
+
+    console.log('=== DEBUG: Fetching banners ===');
+    console.log('Product ID:', id);
+    
+    try {
+      const { data, error, status, statusText } = await supabase
+        .from('product_banners')
+        .select('*')
+        .eq('product_id', id)
+        .eq('is_active', true)
+        .order('display_order', { ascending: true });
+
+      console.log('Supabase Response Status:', status);
+      console.log('Supabase Response Status Text:', statusText);
+      
+      if (error) {
+        console.error('Error details:', error);
+        console.error('Error message:', error.message);
+        console.error('Error code:', error.code);
+        return;
+      }
+
+      console.log('Fetched banners count:', data?.length || 0);
+      console.log('Fetched banners data:', data);
+      
+      if (data && data.length > 0) {
+        setProductBanners(data);
+        console.log('Banners set to state:', data);
+      } else {
+        console.log('No banners found for this product');
+        // Set empty array to ensure component renders with no banners
+        setProductBanners([]);
+      }
+      
+    } catch (error) {
+      console.error('Exception in fetchProductBanners:', error);
+    }
+  };
+
   const checkWishlist = async () => {
-    if (!user) return;
-    const { data } = await supabase
-      .from('wishlist')
-      .select('*')
-      .eq('product_id', id)
-      .eq('user_id', user.id)
-      .single();
-    setIsWishlisted(!!data);
+    if (!user || !id) return;
+    
+    try {
+      const { data } = await supabase
+        .from('wishlist')
+        .select('*')
+        .eq('product_id', id)
+        .eq('user_id', user.id)
+        .maybeSingle();
+      setIsWishlisted(!!data);
+    } catch (error) {
+      console.error('Error checking wishlist:', error);
+    }
   };
 
   const fetchUserRating = async () => {
-    if (!user) return;
-    const { data } = await supabase
-      .from('ratings')
-      .select('rating')
-      .eq('product_id', id)
-      .eq('user_id', user.id)
-      .single();
-    if (data) setUserRating(data.rating);
+    if (!user || !id) return;
+    
+    try {
+      const { data } = await supabase
+        .from('ratings')
+        .select('rating')
+        .eq('product_id', id)
+        .eq('user_id', user.id)
+        .maybeSingle();
+      if (data) setUserRating(data.rating);
+    } catch (error) {
+      console.error('Error fetching user rating:', error);
+    }
   };
 
   const handleAddToCart = () => {
@@ -162,20 +221,31 @@ const ProductDetailPage = () => {
       return;
     }
 
-    if (isWishlisted) {
-      await supabase
-        .from('wishlist')
-        .delete()
-        .eq('product_id', id)
-        .eq('user_id', user.id);
-      setIsWishlisted(false);
-      toast.success('Removed from wishlist');
-    } else {
-      await supabase
-        .from('wishlist')
-        .insert({ product_id: id, user_id: user.id });
-      setIsWishlisted(true);
-      toast.success('Added to wishlist');
+    if (!id) return;
+
+    try {
+      if (isWishlisted) {
+        const { error } = await supabase
+          .from('wishlist')
+          .delete()
+          .eq('product_id', id)
+          .eq('user_id', user.id);
+        
+        if (error) throw error;
+        setIsWishlisted(false);
+        toast.success('Removed from wishlist');
+      } else {
+        const { error } = await supabase
+          .from('wishlist')
+          .insert({ product_id: id, user_id: user.id });
+        
+        if (error) throw error;
+        setIsWishlisted(true);
+        toast.success('Added to wishlist');
+      }
+    } catch (error) {
+      console.error('Error updating wishlist:', error);
+      toast.error('Something went wrong');
     }
   };
 
@@ -196,6 +266,8 @@ const ProductDetailPage = () => {
 
   const discount = calculateDiscount();
   const productImages = product.images?.length > 0 ? product.images : [product.image_url];
+  // Use productBanners from state, not from product.banners
+  const bannersToShow = productBanners;
 
   return (
     <>
@@ -337,7 +409,7 @@ const ProductDetailPage = () => {
                 {product.size && (
                   <div className="mb-6">
                     <p className="text-sm font-semibold text-gray-700 mb-2">Size:</p>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 flex-wrap">
                       {product.size.split(',').map((s) => (
                         <button
                           key={s}
@@ -375,10 +447,11 @@ const ProductDetailPage = () => {
                 <div className="flex gap-4 mb-6">
                   <button
                     onClick={handleAddToCart}
-                    className="flex-1 bg-gradient-to-r from-green-500 to-blue-600 text-white px-8 py-3 rounded-full font-semibold hover:shadow-lg transition-all transform hover:scale-105"
+                    disabled={product.stock === 0}
+                    className="flex-1 bg-gradient-to-r from-green-600 to-emerald-600 text-white px-8 py-3 rounded-full font-semibold hover:from-green-700 hover:to-emerald-700 transition-all shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <ShoppingCart className="inline mr-2 w-5 h-5" />
-                    Add to Cart
+                    {product.stock === 0 ? 'Out of Stock' : 'Add to Cart'}
                   </button>
                   <button
                     onClick={handleWishlist}
@@ -430,7 +503,7 @@ const ProductDetailPage = () => {
                   <button
                     key={tab}
                     onClick={() => setActiveTab(tab)}
-                    className={`px-6 py-4 text-sm font-medium capitalize transition-colors ${
+                    className={`px-6 py-4 text-sm font-medium capitalize transition-colors whitespace-nowrap ${
                       activeTab === tab
                         ? 'text-green-600 border-b-2 border-green-600'
                         : 'text-gray-500 hover:text-gray-700'
@@ -448,7 +521,7 @@ const ProductDetailPage = () => {
             <div className="p-6">
               {activeTab === 'description' && (
                 <div className="prose max-w-none">
-                  <p className="text-gray-700 leading-relaxed">{product.description}</p>
+                  <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{product.description}</p>
                 </div>
               )}
               {activeTab === 'specifications' && (
@@ -473,9 +546,9 @@ const ProductDetailPage = () => {
             </div>
           </div>
 
-          {/* Product Banners - Pass the full banner objects */}
-          {product.banners && product.banners.length > 0 && (
-            <ProductBanners banners={product.banners} />
+          {/* Product Banners - Use the banners from state */}
+          {bannersToShow && bannersToShow.length > 0 && (
+            <ProductBanners banners={bannersToShow} />
           )}
 
           {/* Related Products */}

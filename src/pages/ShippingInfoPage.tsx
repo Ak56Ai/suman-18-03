@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   Package,
-  Search,
   Truck,
   Clock,
   CircleCheck as CheckCircle,
@@ -13,12 +13,12 @@ import {
   Phone,
   Leaf,
   Heart,
-  Droplets,
   Flower2,
   Shield,
   Sparkles,
   Navigation,
-  Compass
+  Compass,
+  Eye
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { getCurrentUser } from '../lib/auth';
@@ -43,6 +43,7 @@ interface OrderInfo {
   estimated_delivery?: string;
   tracking_number?: string;
   courier_partner?: string;
+  order_items?: any[];
 }
 
 interface PendingOrder {
@@ -54,16 +55,18 @@ interface PendingOrder {
   status: string;
   last_delivery_status?: string;
   last_delivery_status_name?: string;
+  order_items?: any[];
 }
 
 const ShippingInfoPage: React.FC = () => {
-  const [orderNumber, setOrderNumber] = useState('');
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [orderInfo, setOrderInfo] = useState<OrderInfo | null>(null);
   const [deliveryStatuses, setDeliveryStatuses] = useState<DeliveryStatus[]>([]);
   const [pendingOrders, setPendingOrders] = useState<PendingOrder[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [user, setUser] = useState<any>(null);
+  const [selectedOrder, setSelectedOrder] = useState<string | null>(null);
 
   useEffect(() => {
     checkUser();
@@ -135,10 +138,55 @@ const ShippingInfoPage: React.FC = () => {
         return;
       }
 
-      // Fetch delivery status for active orders only
-      const ordersWithStatus = await Promise.all(
+      // Fetch order items for active orders
+      const ordersWithItems = await Promise.all(
         activeOrders.map(async (order) => {
-          // Use maybeSingle() instead of single() to avoid errors when no tracking exists
+          // Fetch order items with product details
+          const { data: itemsData, error: itemsError } = await supabase
+            .from('order_items')
+            .select(`
+              *,
+              product:products (
+                id,
+                name,
+                image_url,
+                images
+              )
+            `)
+            .eq('order_id', order.id);
+
+          if (itemsError) console.error('Error fetching items:', itemsError);
+
+          // Process items to include product images
+          const processedItems = (itemsData || []).map(item => {
+            let productImage = 'https://via.placeholder.com/60?text=Product';
+            
+            if (item.product) {
+              if (item.product.image_url) {
+                productImage = item.product.image_url;
+              } else if (item.product.images) {
+                try {
+                  const images = typeof item.product.images === 'string' 
+                    ? JSON.parse(item.product.images) 
+                    : item.product.images;
+                  if (images && images.length > 0) {
+                    productImage = images[0];
+                  }
+                } catch (e) {
+                  console.error('Error parsing images:', e);
+                }
+              }
+            }
+            
+            return {
+              ...item,
+              image_url: productImage,
+              product_name: item.product?.name || item.product_name,
+              product_id: item.product?.id || item.product_id
+            };
+          });
+
+          // Fetch delivery status
           const { data: deliveryData, error: deliveryError } = await supabase
             .from('delivery_tracking')
             .select('status, status_name')
@@ -165,14 +213,15 @@ const ShippingInfoPage: React.FC = () => {
               days_ago: daysDifference,
               status: order.status,
               last_delivery_status: deliveryData?.status,
-              last_delivery_status_name: deliveryData?.status_name || 'Processing'
+              last_delivery_status_name: deliveryData?.status_name || 'Processing',
+              order_items: processedItems || []
             };
           }
           return null;
         })
       );
 
-      const filteredOrders = ordersWithStatus.filter(order => order !== null);
+      const filteredOrders = ordersWithItems.filter(order => order !== null);
       setPendingOrders(filteredOrders as PendingOrder[]);
       
     } catch (error) {
@@ -200,129 +249,50 @@ const ShippingInfoPage: React.FC = () => {
     return `RKIN-${shortId.slice(0, 5)}`;
   };
 
-  const handleOrderClick = (orderNumber: string) => {
-    setOrderNumber(orderNumber);
-    setTimeout(() => {
-      const fakeEvent = { preventDefault: () => {} } as React.FormEvent;
-      handleSearch(fakeEvent);
-    }, 100);
+  const handleTrackOrder = (e: React.MouseEvent, orderNumber: string, orderId: string) => {
+    e.stopPropagation();
+    setSelectedOrder(orderId);
+    fetchOrderDetails(orderId);
   };
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!orderNumber.trim()) {
-      toast.error('Please enter your order number');
-      return;
-    }
-
+  const fetchOrderDetails = async (orderId: string) => {
     setLoading(true);
     try {
-      let query = supabase
+      // Fetch order details
+      const { data: order, error: orderError } = await supabase
         .from('orders')
-        .select('*');
+        .select('*')
+        .eq('id', orderId)
+        .single();
 
-      const searchTerm = orderNumber.trim();
-      
-      // Search by order_number if it starts with RKIN
-      if (searchTerm.startsWith('RKIN-')) {
-        query = query.eq('order_number', searchTerm);
-      } 
-      // Otherwise search by partial ID (convert UUID to text)
-      else {
-        query = query.or(`id::text.ilike.%${searchTerm}%,order_number.ilike.%${searchTerm}%`);
-      }
-
-      const { data: orders, error: orderError } = await query.limit(1);
-
-      if (orderError) {
-        console.error('Order fetch error:', orderError);
-        throw orderError;
-      }
-
-      if (!orders || orders.length === 0) {
-        toast.error('Order not found. Please check your order number.');
-        setOrderInfo(null);
-        setDeliveryStatuses([]);
-        return;
-      }
-
-      const order = orders[0];
-      
-      // Check if the order has been returned or cancelled
-      const { data: returnCheck, error: returnCheckError } = await supabase
-        .from('order_returns')
-        .select('id, status')
-        .eq('order_id', order.id)
-        .eq('user_id', user?.id)
-        .maybeSingle();
-
-      if (returnCheckError) console.error('Error checking returns:', returnCheckError);
-
-      const { data: cancellationCheck, error: cancellationCheckError } = await supabase
-        .from('order_cancellations')
-        .select('id, status')
-        .eq('order_id', order.id)
-        .eq('user_id', user?.id)
-        .maybeSingle();
-
-      if (cancellationCheckError) console.error('Error checking cancellations:', cancellationCheckError);
-
-      // If order is returned or cancelled, show appropriate message
-      if (returnCheck) {
-        const returnStatus = returnCheck.status;
-        if (returnStatus === 'approved') {
-          toast.error('This order has been returned and is no longer active.');
-        } else if (returnStatus === 'pending') {
-          toast.info('This order has a pending return request and cannot be tracked.');
-        } else {
-          toast.error('This order has been returned and cannot be tracked.');
-        }
-        setOrderInfo(null);
-        setDeliveryStatuses([]);
-        return;
-      }
-
-      if (cancellationCheck) {
-        const cancelStatus = cancellationCheck.status;
-        if (cancelStatus === 'approved') {
-          toast.error('This order has been cancelled and is no longer active.');
-        } else if (cancelStatus === 'pending') {
-          toast.info('This order has a pending cancellation request and cannot be tracked.');
-        } else {
-          toast.error('This order has been cancelled and cannot be tracked.');
-        }
-        setOrderInfo(null);
-        setDeliveryStatuses([]);
-        return;
-      }
-
-      console.log('Order found:', order);
-      setOrderInfo(order);
+      if (orderError) throw orderError;
 
       // Fetch delivery tracking
       const { data: tracking, error: trackingError } = await supabase
         .from('delivery_tracking')
         .select('*')
-        .eq('order_id', order.id)
+        .eq('order_id', orderId)
         .order('created_at', { ascending: true });
 
       if (trackingError) throw trackingError;
 
+      setOrderInfo(order);
       setDeliveryStatuses(tracking || []);
       
-      if (tracking && tracking.length > 0) {
-        const lastStatus = tracking[tracking.length - 1];
-        toast.success(`Order found! Status: ${lastStatus.status_name}`);
-      } else {
-        toast.success('Order found! Tracking information will appear soon.');
-      }
+      // Scroll to order tracking section
+      document.getElementById('order-tracking-section')?.scrollIntoView({ behavior: 'smooth' });
       
     } catch (error) {
       console.error('Error fetching order:', error);
-      toast.error('Unable to track order. Please try again.');
+      toast.error('Unable to fetch order details');
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleProductClick = (e: React.MouseEvent, productId: string) => {
+    e.stopPropagation();
+    navigate(`/product/${productId}`);
   };
 
   const getStatusIcon = (status: number) => {
@@ -415,19 +385,6 @@ const ShippingInfoPage: React.FC = () => {
     },
   ];
 
-  const getTrackingSteps = () => {
-    const steps = [
-      { status: 1, label: 'Order Received', icon: Heart, description: 'Your order is confirmed' },
-      { status: 2, label: 'Blessed & Packed', icon: Flower2, description: 'Carefully packed with love' },
-      { status: 3, label: 'Awaiting Dispatch', icon: Clock, description: 'Ready for shipment' },
-      { status: 4, label: 'On the Way', icon: Truck, description: 'Journey begins' },
-      { status: 5, label: 'Near You', icon: MapPin, description: 'Arriving soon' },
-      { status: 6, label: 'Out for Delivery', icon: Compass, description: 'Coming today' },
-      { status: 7, label: 'Delivered', icon: CheckCircle, description: 'Enjoy your wellness' },
-    ];
-    return steps;
-  };
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-emerald-50 flex flex-col">
 
@@ -447,7 +404,7 @@ const ShippingInfoPage: React.FC = () => {
 
       {/* Main Content */}
       <main className="flex-grow py-12">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           {/* Header */}
           <motion.div
             initial={{ opacity: 0, y: -20 }}
@@ -470,7 +427,7 @@ const ShippingInfoPage: React.FC = () => {
             </p>
           </motion.div>
 
-          {/* Pending Orders Section */}
+          {/* Pending Orders Section - 2 Column Grid */}
           {user && pendingOrders.length > 0 && (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -493,42 +450,92 @@ const ShippingInfoPage: React.FC = () => {
                 </div>
 
                 <p className="text-sm text-gray-600 mb-4">
-                  Click on any order to track its delivery status
+                  Track your active orders and their delivery status
                 </p>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* 2 Column Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {pendingOrders.map((order) => (
                     <motion.div
                       key={order.id}
-                      whileHover={{ scale: 1.02, y: -2 }}
-                      whileTap={{ scale: 0.98 }}
-                      onClick={() => handleOrderClick(order.order_number)}
-                      className="border border-gray-200 rounded-xl p-4 cursor-pointer hover:border-green-500 hover:shadow-lg transition-all duration-200 bg-gradient-to-br from-white to-green-50/30"
+                      whileHover={{ y: -2 }}
+                      className="border border-gray-200 rounded-xl p-4 hover:border-green-500 hover:shadow-lg transition-all duration-200 bg-white flex flex-col h-full"
                     >
-                      <div className="flex justify-between items-start mb-2">
-                        <div>
+                      {/* Order Header */}
+                      <div className="flex justify-between items-start mb-3">
+                        <div className="flex-1">
                           <p className="text-sm font-mono text-gray-900 font-medium">
                             {order.order_number}
                           </p>
-                          <p className="text-sm text-gray-500 flex items-center gap-1 mt-1">
+                          <p className="text-xs text-gray-500 flex items-center gap-1 mt-1">
                             <Clock className="h-3 w-3" />
                             {order.days_ago} {order.days_ago === 1 ? 'day' : 'days'} ago
                           </p>
                         </div>
-                        <span
-                          className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusBadgeColor(order.last_delivery_status_name)}`}
-                        >
-                          {order.last_delivery_status_name || 'Processing'}
-                        </span>
+                        <div className="flex flex-col items-end gap-1">
+                          <span
+                            className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusBadgeColor(order.last_delivery_status_name)}`}
+                          >
+                            {order.last_delivery_status_name || 'Processing'}
+                          </span>
+                          <span className="text-sm font-bold text-green-600">
+                            ₹{order.total_amount.toLocaleString()}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex justify-between items-center mt-2">
-                        <p className="text-sm font-semibold text-gray-900">
-                          ₹{order.total_amount.toLocaleString()}
-                        </p>
-                        <p className="text-xs text-green-600 flex items-center gap-1">
-                          <Compass className="h-3 w-3" />
+
+                      {/* Order Items with Images */}
+                      {order.order_items && order.order_items.length > 0 && (
+                        <div className="border-t border-gray-100 pt-3 mt-2 flex-1">
+                          <p className="text-xs text-gray-500 mb-2">Items in this order:</p>
+                          <div className="space-y-2">
+                            {order.order_items.slice(0, 2).map((item) => (
+                              <div 
+                                key={item.id}
+                                onClick={(e) => handleProductClick(e, item.product_id)}
+                                className="flex items-center gap-3 cursor-pointer group/item hover:bg-gray-50 rounded-lg p-2 transition-colors"
+                              >
+                                <div className="w-12 h-12 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0">
+                                  <img
+                                    src={item.image_url}
+                                    alt={item.product_name}
+                                    className="w-full h-full object-cover group-hover/item:scale-110 transition-transform duration-300"
+                                    onError={(e) => {
+                                      e.currentTarget.src = 'https://via.placeholder.com/48?text=Product';
+                                    }}
+                                  />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-medium text-gray-900 group-hover/item:text-green-600 transition-colors truncate">
+                                    {item.product_name}
+                                  </p>
+                                  <p className="text-xs text-gray-500">
+                                    Qty: {item.quantity} × ₹{item.price}
+                                  </p>
+                                </div>
+                                <p className="text-xs font-semibold text-gray-900 whitespace-nowrap">
+                                  ₹{(item.price * item.quantity).toFixed(2)}
+                                </p>
+                              </div>
+                            ))}
+                            {order.order_items.length > 2 && (
+                              <p className="text-xs text-gray-400 text-center pt-1">
+                                +{order.order_items.length - 2} more items
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Track Order Button */}
+                      <div className="mt-4 pt-3 border-t border-gray-100 flex justify-end">
+                        <button
+                          onClick={(e) => handleTrackOrder(e, order.order_number, order.id)}
+                          className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg text-sm font-medium hover:from-green-700 hover:to-emerald-700 transition-all shadow-md hover:shadow-lg"
+                        >
+                          <Eye className="h-4 w-4" />
                           Track Order
-                        </p>
+                        </button>
                       </div>
                     </motion.div>
                   ))}
@@ -538,66 +545,36 @@ const ShippingInfoPage: React.FC = () => {
           )}
 
           {/* Order Tracking Section */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.2 }}
-            className="bg-white rounded-2xl shadow-lg p-8 mb-8 relative overflow-hidden"
-          >
-            <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-bl from-green-50 to-transparent rounded-bl-full" />
-            <div className="absolute bottom-0 left-0 w-24 h-24 bg-gradient-to-tr from-emerald-50 to-transparent rounded-tr-full" />
-            
-            <div className="relative z-10">
-              <div className="flex items-center mb-6">
-                <div className="p-3 bg-gradient-to-r from-green-100 to-emerald-100 rounded-lg mr-4">
-                  <Search className="h-6 w-6 text-green-600" />
-                </div>
-                <div>
-                  <h2 className="text-2xl font-bold text-gray-900">Find Your Order</h2>
-                  <p className="text-gray-600">Enter your order number to begin tracking</p>
-                </div>
-              </div>
-
-              <form onSubmit={handleSearch} className="mb-8">
-                <div className="flex flex-col sm:flex-row gap-4">
-                  <div className="flex-1 relative">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
-                    <input
-                      type="text"
-                      value={orderNumber}
-                      onChange={(e) => setOrderNumber(e.target.value)}
-                      placeholder="Enter order number (e.g., RKIN-260321-00001)"
-                      className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all duration-300 bg-gray-50 hover:bg-white focus:bg-white"
-                      disabled={loading}
-                    />
+          {orderInfo && (
+            <div id="order-tracking-section">
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5 }}
+                className="bg-white rounded-2xl shadow-lg p-8 mb-8 relative overflow-hidden"
+              >
+                <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-bl from-green-50 to-transparent rounded-bl-full" />
+                <div className="absolute bottom-0 left-0 w-24 h-24 bg-gradient-to-tr from-emerald-50 to-transparent rounded-tr-full" />
+                
+                <div className="relative z-10">
+                  <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center">
+                      <div className="p-3 bg-gradient-to-r from-green-100 to-emerald-100 rounded-lg mr-4">
+                        <Package className="h-6 w-6 text-green-600" />
+                      </div>
+                      <div>
+                        <h2 className="text-2xl font-bold text-gray-900">Order Tracking</h2>
+                        <p className="text-gray-600">Order #{formatOrderId(orderInfo)}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setOrderInfo(null)}
+                      className="text-gray-400 hover:text-gray-600"
+                    >
+                      ×
+                    </button>
                   </div>
-                  <motion.button
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    type="submit"
-                    disabled={loading}
-                    className="px-8 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg font-semibold hover:from-green-700 hover:to-emerald-700 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center shadow-md hover:shadow-lg"
-                  >
-                    {loading ? (
-                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                    ) : (
-                      <>
-                        <Search className="h-5 w-5 mr-2" />
-                        Track Order
-                      </>
-                    )}
-                  </motion.button>
-                </div>
-              </form>
 
-              {/* Order Information Display */}
-              {orderInfo && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  transition={{ duration: 0.3 }}
-                  className="border-t border-gray-100 pt-8"
-                >
                   {/* Progress Bar */}
                   {deliveryStatuses.length > 0 && (
                     <div className="mb-8">
@@ -640,7 +617,7 @@ const ShippingInfoPage: React.FC = () => {
                         <div className="flex justify-between py-2 border-b border-green-100">
                           <span className="text-gray-600">Status:</span>
                           <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                            orderInfo.status === 'COMPLETED' ? 'bg-green-100 text-green-800' :
+                            orderInfo.status === 'PAID' ? 'bg-green-100 text-green-800' :
                             orderInfo.status === 'PENDING' ? 'bg-yellow-100 text-yellow-800' :
                             'bg-blue-100 text-blue-800'
                           }`}>
@@ -689,12 +666,6 @@ const ShippingInfoPage: React.FC = () => {
                           <p className="text-xl font-bold text-gray-900">{getEstimatedDeliveryDate()}</p>
                         </div>
                       </div>
-                      {orderInfo.courier_partner && (
-                        <div className="text-right">
-                          <p className="text-sm text-gray-600">Delivery Partner</p>
-                          <p className="font-semibold text-gray-900">{orderInfo.courier_partner}</p>
-                        </div>
-                      )}
                     </div>
                   </div>
 
@@ -706,7 +677,6 @@ const ShippingInfoPage: React.FC = () => {
                         Journey Timeline
                       </h3>
 
-                      {/* Status Timeline */}
                       <div className="space-y-4">
                         {deliveryStatuses.map((status, index) => (
                           <motion.div
@@ -738,7 +708,6 @@ const ShippingInfoPage: React.FC = () => {
                         ))}
                       </div>
 
-                      {/* Delivery Confirmation */}
                       {deliveryStatuses.some((s) => s.status === 7) && (
                         <div className="mt-6 p-4 bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg">
                           <div className="flex items-center">
@@ -751,27 +720,13 @@ const ShippingInfoPage: React.FC = () => {
                       )}
                     </div>
                   )}
-
-                  {/* No Tracking Info */}
-                  {deliveryStatuses.length === 0 && orderInfo && (
-                    <div className="text-center py-8">
-                      <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <Clock className="h-10 w-10 text-amber-600" />
-                      </div>
-                      <h3 className="text-lg font-semibold text-gray-900 mb-2">Preparing Your Wellness Package</h3>
-                      <p className="text-gray-600 max-w-md mx-auto">
-                        Our team is carefully preparing your natural products. 
-                        Tracking information will appear here once your order ships.
-                      </p>
-                    </div>
-                  )}
-                </motion.div>
-              )}
+                </div>
+              </motion.div>
             </div>
-          </motion.div>
+          )}
 
-          {/* Shipping Information Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          {/* Shipping Information Cards - Bottom Section */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
             {shippingInfo.map((info, index) => (
               <motion.div
                 key={index}
@@ -808,7 +763,6 @@ const ShippingInfoPage: React.FC = () => {
           </motion.div>
         </div>
       </main>
-
     </div>
   );
 };

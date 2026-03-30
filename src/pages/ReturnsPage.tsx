@@ -79,6 +79,7 @@ const ReturnsPage: React.FC = () => {
 
       const processedOrders = await Promise.all(
         (orders || []).map(async (order) => {
+          // Fetch delivery tracking
           const { data: deliveryData } = await supabase
             .from('delivery_tracking')
             .select('status_name, created_at')
@@ -87,10 +88,52 @@ const ReturnsPage: React.FC = () => {
             .limit(1)
             .maybeSingle();
 
+          // Fetch order items with product details
           const { data: items } = await supabase
             .from('order_items')
-            .select('id')
-            .eq('order_id', order.id);
+            .select(`
+              id,
+              quantity,
+              price,
+              product_name,
+              product_id,
+              product:products (
+                id,
+                name,
+                image_url,
+                images
+              )
+            `)
+            .eq('order_id', order.id)
+            .limit(2);
+
+          // Process items to include product images
+          const processedItems = (items || []).map(item => {
+            let productImage = 'https://via.placeholder.com/48?text=Product';
+            
+            if (item.product) {
+              if (item.product.image_url) {
+                productImage = item.product.image_url;
+              } else if (item.product.images) {
+                try {
+                  const images = typeof item.product.images === 'string' 
+                    ? JSON.parse(item.product.images) 
+                    : item.product.images;
+                  if (images && images.length > 0) {
+                    productImage = images[0];
+                  }
+                } catch (e) {
+                  console.error('Error parsing images:', e);
+                }
+              }
+            }
+            
+            return {
+              ...item,
+              image_url: productImage,
+              product_name: item.product?.name || item.product_name
+            };
+          });
 
           const currentStatus = deliveryData?.status_name || 'Processing';
           const actionType = getActionType(currentStatus);
@@ -101,7 +144,8 @@ const ReturnsPage: React.FC = () => {
             current_status: currentStatus,
             action_type: actionType,
             delivered_at: deliveryData?.status_name === 'Delivered' ? deliveryData.created_at : null,
-            items_count: items?.length || 0
+            items_count: items?.length || 0,
+            items: processedItems || []
           };
         })
       );
@@ -226,7 +270,6 @@ const ReturnsPage: React.FC = () => {
         let returnPolicyDays = 7;
         
         if (product && !isProcessed) {
-          // Parse returnable if it's a string
           let productReturnable = product.returnable;
           if (typeof productReturnable === 'string') {
             productReturnable = productReturnable === 'true';
@@ -344,7 +387,7 @@ const ReturnsPage: React.FC = () => {
     }
   };
 
-    // Cancel Handler
+  // Cancel Handler
   const handleCancel = async () => {
     if (!orderInfo || selectedItems.length === 0) {
       toast.error('Select items to cancel');
@@ -354,40 +397,30 @@ const ReturnsPage: React.FC = () => {
     setSubmitting(true);
 
     try {
-      // Make sure user is logged in and has an ID
       if (!user || !user.id) {
         toast.error('User not authenticated');
         return;
       }
 
-      console.log('Submitting cancellation with user_id:', user.id);
-
       const payload = selectedItems.map(itemId => ({
         order_id: orderInfo.id,
         order_item_id: itemId,
-        user_id: user.id,  // This must match auth.uid()
+        user_id: user.id,
         order_number: orderInfo.order_number || generateOrderNumber(orderInfo.id),
         reason: form.reason || 'User requested cancellation',
         comment: form.comment,
         status: 'cancelled'
       }));
 
-      console.log('Payload:', payload);
-
       const { data, error } = await supabase
         .from('order_cancellations')
         .insert(payload)
         .select();
 
-      if (error) {
-        console.error('Insert error:', error);
-        throw error;
-      }
+      if (error) throw error;
 
-      console.log('Cancellation successful:', data);
       toast.success(`Cancellation request submitted for ${selectedItems.length} item(s)`);
 
-      // Reset state
       setOrderInfo(null);
       setSelectedItems([]);
       setForm({ reason: '', comment: '' });
@@ -478,7 +511,7 @@ const ReturnsPage: React.FC = () => {
       </div>
 
       <main className="flex-grow py-12">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           {/* Header */}
           <motion.div
             initial={{ opacity: 0, y: -20 }}
@@ -489,8 +522,6 @@ const ReturnsPage: React.FC = () => {
             <div className="inline-flex items-center gap-2 bg-green-100 rounded-full px-4 py-2 mb-4">
               <RotateCcw className="w-4 h-4 text-green-600" />
               <span className="text-green-700 text-sm font-medium">Easy Returns & Cancellations</span>
-            </div>
-            <div className="flex items-center justify-center mb-4">
             </div>
             <h1 className="text-4xl font-bold text-gray-900 mb-4">
               Returns & Cancellations
@@ -503,7 +534,7 @@ const ReturnsPage: React.FC = () => {
             </p>
           </motion.div>
 
-          {/* Recent Orders Section */}
+          {/* Recent Orders Section - 2 Column Grid */}
           {user && pendingOrders.length > 0 && (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -552,7 +583,38 @@ const ReturnsPage: React.FC = () => {
                           {order.current_status}
                         </span>
                       </div>
-                      <div className="flex justify-between items-center mt-2">
+                      
+                      {/* Order Items Preview */}
+                      {order.items && order.items.length > 0 && (
+                        <div className="border-t border-gray-100 pt-3 mt-2">
+                          <div className="flex items-center gap-2">
+                            {order.items.slice(0, 2).map((item: any, idx: number) => (
+                              <div key={idx} className="flex items-center gap-2">
+                                <div className="w-8 h-8 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0">
+                                  <img
+                                    src={item.image_url}
+                                    alt={item.product_name}
+                                    className="w-full h-full object-cover"
+                                    onError={(e) => {
+                                      e.currentTarget.src = 'https://via.placeholder.com/32?text=Product';
+                                    }}
+                                  />
+                                </div>
+                                <span className="text-xs text-gray-600 truncate max-w-[120px]">
+                                  {item.product_name}
+                                </span>
+                              </div>
+                            ))}
+                            {order.items_count > 2 && (
+                              <span className="text-xs text-gray-400">
+                                +{order.items_count - 2} more
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      
+                      <div className="flex justify-between items-center mt-3">
                         <p className="text-sm font-semibold text-gray-900">
                           ₹{order.total_amount.toLocaleString()}
                         </p>
@@ -628,7 +690,7 @@ const ReturnsPage: React.FC = () => {
                 </div>
               </form>
 
-              {/* Order Details */}
+              {/* Order Details - Keep as is */}
               {orderInfo && (
                 <motion.div
                   initial={{ opacity: 0, height: 0 }}
@@ -636,6 +698,7 @@ const ReturnsPage: React.FC = () => {
                   transition={{ duration: 0.3 }}
                   className="border-t border-gray-100 pt-8"
                 >
+                  {/* Order details content remains the same */}
                   <div className="flex justify-between items-start mb-4">
                     <div>
                       <h3 className="text-lg font-semibold text-gray-900">Order Details</h3>
@@ -831,7 +894,7 @@ const ReturnsPage: React.FC = () => {
             </div>
           </motion.div>
 
-          {/* Policy Cards */}
+          {/* Policy Cards - 2 Column Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
             {returnPolicyCards.map((policy, index) => (
               <motion.div
